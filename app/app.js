@@ -27,7 +27,7 @@ const state = {
   videos: {},
   videoKw: null,
   jobs: { total: 0, done: 0, label: "" },
-  lab: store.get("fireiq.labTitle", SNAPSHOT?.titles?.[0]?.title ?? ""),
+  lab: store.get("fireiq.labTitle", ""),
 };
 
 // ---------- data ----------
@@ -503,11 +503,31 @@ const NAMES = {
   e_list: "List", e_negativity: "Negativity", e_question: "Question", e_time: "Time",
 };
 const col = (s) => (s >= 70 ? "var(--green)" : s >= 50 ? "var(--amber)" : "var(--red)");
+// Saved titles live in this browser: [{ title, keyword, at }].
+const saved = () => store.get("fireiq.saved", []);
+const isSaved = (t) => saved().some((x) => x.title.toLowerCase() === t.trim().toLowerCase());
+function toggleSave(title, keyword = "") {
+  title = title.trim();
+  if (!title) return;
+  store.set("fireiq.saved", isSaved(title) ? saved().filter((x) => x.title.toLowerCase() !== title.toLowerCase()) : [{ title, keyword, at: Date.now() }, ...saved()].slice(0, 100));
+  refreshSaved();
+}
+const STAR = (on) => `<svg width="18" height="18" viewBox="0 0 24 24" fill="${on ? "currentColor" : "none"}" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="m12 3 2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z"/></svg>`;
+function refreshSaved() {
+  const el = $("savedList"); if (!el) return;
+  const list = saved().map((x) => ({ ...x, score: scoreTitle(x.title, MODEL).score })).sort((a, b) => b.score - a.score);
+  el.innerHTML = list.length ? `<table><thead><tr><th>Title</th><th class="r">Score</th><th class="r" style="width:96px"></th></tr></thead><tbody>
+    ${list.map((r) => `<tr data-t="${esc(r.title)}"><td class="kw">${esc(r.title)}${r.keyword ? `<span class="pattern">${esc(r.keyword)}</span>` : ""}</td>
+      <td class="r"><span class="badge ${r.score >= 70 ? "b-green" : r.score >= 50 ? "b-amber" : "b-red"}">${r.score}</span></td>
+      <td class="r acts-cell"><button class="icon-btn" data-copy="${esc(r.title)}" title="Copy">Copy</button><button class="icon-btn" data-unsave="${esc(r.title)}" title="Remove">✕</button></td></tr>`).join("")}
+  </tbody></table>` : `<div class="empty">Star a suggested title, or the one you're editing above, to keep it here.</div>`;
+  const input = $("labIn");
+  if (input) { const on = isSaved(input.value); $("saveT").innerHTML = `${STAR(on)}${on ? "Saved" : "Save"}`; $("saveT").classList.toggle("saved", on); }
+  document.querySelectorAll("[data-star]").forEach((b) => { const on = isSaved(b.dataset.star); b.innerHTML = STAR(on); b.classList.toggle("on", on); });
+}
 function renderLab(v) {
-  const saved = store.get("fireiq.titles", []);
-  const list = [...new Set([...saved, ...(SNAPSHOT?.titles || []).map((t) => t.title)])].map((t) => scoreTitle(t, MODEL)).sort((a, b) => b.score - a.score);
   v.innerHTML = `
-    <div class="sec"><div class="search" style="height:56px"><input id="labIn" placeholder="Type a title to score…" autocomplete="off" spellcheck="false" style="font-size:17px;font-weight:700"><button class="btn" id="saveT">Save</button></div></div>
+    <div class="sec"><div class="search" style="height:56px"><input id="labIn" placeholder="Type a title to score…" autocomplete="off" spellcheck="false" style="font-size:17px;font-weight:700"><button class="btn ghost star-btn" id="saveT"></button></div></div>
     <div class="lab">
       <div class="panel gauge" id="gauge"></div>
       <div class="panel"><div class="sec-h"><h2>What's moving the score</h2></div><div id="factors"></div>
@@ -523,10 +543,7 @@ function renderLab(v) {
         <div id="sug" style="margin-top:6px"></div>
       </div>
     </div>
-    <div class="sec">${head("search", "Your titles")}
-      <table><thead><tr><th>Title</th><th class="r">Score</th></tr></thead><tbody>
-      ${list.map((r) => `<tr data-t="${esc(r.title)}"><td class="kw">${esc(r.title)}</td><td class="r"><span class="badge ${r.score >= 70 ? "b-green" : r.score >= 50 ? "b-amber" : "b-red"}">${r.score}</span></td></tr>`).join("")}
-      </tbody></table></div>`;
+    <div class="sec"><div class="sec-h"><h2>${STAR(true)}Saved titles</h2></div><div id="savedList"></div></div>`;
   const input = $("labIn");
   input.value = state.lab;
   const update = () => {
@@ -547,9 +564,15 @@ function renderLab(v) {
   update();
   renderSuggestions();
   $("sugForm").onsubmit = (e) => { e.preventDefault(); suggest(false); };
-  $("saveT").onclick = () => { const t = input.value.trim(); if (t) { store.set("fireiq.titles", [t, ...saved.filter((x) => x !== t)].slice(0, 30)); renderLab(v); } };
+  $("saveT").onclick = () => toggleSave(input.value, state.sugKw ?? "");
+  input.addEventListener("input", refreshSaved);
+  refreshSaved();
   v.onclick = (e) => {
     if (e.target.closest("#moreT")) return suggest(true);
+    const star = e.target.closest("[data-star]"); if (star) return toggleSave(star.dataset.star, state.sugKw ?? "");
+    const un = e.target.closest("[data-unsave]"); if (un) return toggleSave(un.dataset.unsave);
+    const cp = e.target.closest("[data-copy]");
+    if (cp) { navigator.clipboard?.writeText(cp.dataset.copy).then(() => { cp.textContent = "Copied"; setTimeout(() => (cp.textContent = "Copy"), 1200); }); return; }
     if (e.target.closest("a")) return;
     const r = e.target.closest("[data-t]"); if (r) { state.lab = r.dataset.t; input.value = r.dataset.t; update(); scrollTo({ top: 0, behavior: "smooth" }); }
   };
@@ -583,8 +606,8 @@ function renderSuggestions() {
   if (s.loading) { el.innerHTML = Array.from({ length: 5 }, () => `<div class="skel" style="height:48px;margin-top:8px"></div>`).join(""); return; }
   if (s.error) { el.innerHTML = s.auth ? connectCard(s.auth) : `<div class="err" style="margin-top:10px">${esc(s.error)}</div>`; return; }
   el.innerHTML = `${s.subject ? `<div class="about"><b>What this is about:</b> ${esc(s.subject)}${s.angles?.length ? `<div class="angles">${s.angles.slice(0, 5).map((a) => `<span>${esc(a)}</span>`).join("")}</div>` : ""}</div>` : ""}
-  <table class="sug"><thead><tr><th>Title</th><th class="r">Score</th></tr></thead><tbody>
-    ${s.titles.map((t) => `<tr data-t="${esc(t.title)}"><td><div>${esc(t.title)}<span class="pattern">${esc(t.pattern)}</span></div>
+  <table class="sug"><thead><tr><th style="width:44px"></th><th>Title</th><th class="r">Score</th></tr></thead><tbody>
+    ${s.titles.map((t) => `<tr data-t="${esc(t.title)}"><td class="star-cell"><button class="icon-btn star" data-star="${esc(t.title)}" title="Save">${STAR(isSaved(t.title))}</button></td><td><div>${esc(t.title)}<span class="pattern">${esc(t.pattern)}</span></div>
       ${t.inspired_by ? `<div class="from">Inspired by <a href="${esc(t.inspired_url)}" target="_blank" rel="noopener">${esc(t.inspired_by)}</a>${t.inspired_views ? ` · ${fmt(t.inspired_views)} views` : ""}</div>` : `<div class="from">From title-score: one of the framings that lifts vidIQ's score most</div>`}</td>
       <td class="r"><span class="badge ${t.score >= 70 ? "b-green" : t.score >= 50 ? "b-amber" : "b-red"}">${t.score}</span></td></tr>`).join("")}
   </tbody></table>
