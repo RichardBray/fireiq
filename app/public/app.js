@@ -423,11 +423,17 @@ function loadVideos(keyword) {
   render();
 }
 const ytId = (url) => new URL(url).searchParams.get("v");
+// YouTube only shows rough ages ("8d ago", "1y ago"), so views per day is an estimate; anything under a
+// day counts as one day so brand-new videos don't divide by zero.
+const DAYS = { s: 1 / 86400, m: 1 / 1440, min: 1 / 1440, h: 1 / 24, d: 1, w: 7, wk: 7, mo: 30, y: 365, yr: 365 };
+const ageDays = (age) => { const m = String(age).match(/(\d+)\s?(mo|min|yr|wk|s|m|h|d|w|y)/); return m ? Math.max(1, Number(m[1]) * DAYS[m[2]]) : 365; };
+const perDay = (v) => v.views / ageDays(v.age);
 function videoCard(v, mult) {
   const bg = mult >= 3 ? "#e5484d" : mult >= 1.5 ? "#7c5cff" : "rgba(20,24,36,.85)";
   const s = scoreTitle(v.title, MODEL).score;
   return `<a class="vcard" href="${esc(v.url)}" target="_blank" rel="noopener"><div class="thumb"><img src="https://i.ytimg.com/vi/${esc(ytId(v.url))}/mqdefault.jpg" alt="" loading="lazy">${mult >= 1.5 ? `<span class="x" style="background:${bg}">${mult >= 10 ? Math.round(mult) : mult.toFixed(1).replace(/\.0$/, "")}x</span>` : ""}</div>
     <div class="t">${esc(v.title)}</div><div class="m">${fmt(v.views)} views • ${esc(v.age)}${v.channel ? " • " + esc(v.channel) : ""}</div>
+    ${state.vidMode === "hot" ? `<div class="m">≈ ${fmt(Math.round(perDay(v)))} views/day</div>` : ""}
     <div class="m">Title score <span class="badge ${s >= 70 ? "b-green" : s >= 50 ? "b-amber" : "b-red"}" style="min-width:0;padding:1px 6px;font-size:12px">${s}</span></div></a>`;
 }
 function renderVideos(v) {
@@ -439,20 +445,28 @@ function renderVideos(v) {
   const pick = `<div class="chips">${opts.map((k) => `<button class="chip ${k === kw ? "on" : ""}" data-vk="${esc(k)}">${esc(k)}</button>`).join("")}</div>`;
   if (d.loading) { v.innerHTML = `<div class="sec">${pick}<div class="grid-videos">${Array.from({ length: 8 }, () => `<div><div class="skel" style="aspect-ratio:16/9;margin-bottom:10px"></div><div class="skel" style="height:13px;margin-bottom:6px"></div><div class="skel" style="height:13px;width:60%"></div></div>`).join("")}</div></div>`; wireVideos(v); return; }
   if (d.error) { v.innerHTML = `<div class="sec">${pick}${d.auth ? connectCard(d.auth) : `<div class="err">${esc(d.error)}</div>`}</div>`; wireVideos(v); return; }
-  const list = d.list;
-  const sorted = list.map((x) => x.views).sort((a, b) => a - b);
+  // "Most viewed" compares total views; "Hot right now" compares views per day, so recent videos that are
+  // taking off stand out from old ones that have had years to collect views.
+  const hot = state.vidMode === "hot";
+  const metric = hot ? perDay : (x) => x.views;
+  const list = hot ? [...d.list].sort((a, b) => perDay(b) - perDay(a)) : d.list;
+  const sorted = list.map(metric).sort((a, b) => a - b);
   const median = sorted[Math.floor(sorted.length / 2)] || 1;
-  const outliers = list.map((x) => ({ x, m: x.views / median })).filter((o) => o.m >= 1.5).sort((a, b) => b.m - a.m);
+  const outliers = list.map((x) => ({ x, m: metric(x) / median })).filter((o) => o.m >= 1.5).sort((a, b) => b.m - a.m);
+  const mode = `<span class="seg"><button class="${hot ? "" : "on"}" data-vm="views">Most viewed</button><button class="${hot ? "on" : ""}" data-vm="hot">Hot right now</button></span>`;
   v.innerHTML = `<div class="sec">${pick}</div>
-    <div class="sec">${head("fire", `Outlier videos for <em>${esc(kw)}</em>`)}
-      ${outliers.length ? `<div class="row-scroll">${outliers.map((o) => videoCard(o.x, o.m)).join("")}</div>` : `<div class="empty">No video here gets more than 1.5x the typical views.</div>`}
-      <div class="note">Views compared with the median of YouTube's top results for this keyword (${fmt(median)} views).</div></div>
+    <div class="sec"><div class="sec-h"><h2>${ICON.fire}${hot ? "Taking off" : "Outlier videos"} for&nbsp;<em>${esc(kw)}</em></h2>${mode}</div>
+      ${outliers.length ? `<div class="row-scroll">${outliers.map((o) => videoCard(o.x, o.m)).join("")}</div>` : `<div class="empty">No video here gets more than 1.5x the typical ${hot ? "views per day" : "views"}.</div>`}
+      <div class="note">${hot ? `Views per day compared with the median of YouTube's top results for this keyword (≈ ${fmt(Math.round(median))} a day). Ages are rounded by YouTube, so this is an estimate.` : `Views compared with the median of YouTube's top results for this keyword (${fmt(median)} views).`}</div></div>
     <div class="sec">${head("play", `Thumbnails <span style="color:var(--dim);font-size:14px">${list.length}</span>`)}
-      ${list.length ? `<div class="grid-videos">${list.map((x) => videoCard(x, x.views / median)).join("")}</div>` : `<div class="empty">YouTube returned no on-topic videos for this keyword.</div>`}</div>`;
+      ${list.length ? `<div class="grid-videos">${list.map((x) => videoCard(x, metric(x) / median)).join("")}</div>` : `<div class="empty">YouTube returned no on-topic videos for this keyword.</div>`}</div>`;
   wireVideos(v);
 }
 function wireVideos(v) {
-  v.onclick = (e) => { const k = e.target.closest("[data-vk]"); if (k) loadVideos(k.dataset.vk); };
+  v.onclick = (e) => {
+    const m = e.target.closest("[data-vm]"); if (m) { state.vidMode = m.dataset.vm; return render(); }
+    const k = e.target.closest("[data-vk]"); if (k) loadVideos(k.dataset.vk);
+  };
 }
 function wire(v) {
   v.onclick = (e) => {
