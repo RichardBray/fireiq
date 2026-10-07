@@ -12,6 +12,7 @@ const ICON = {
   fire: `<svg viewBox="0 0 24 24"><path d="M12 3c1 4 5 5.5 5 10a5 5 0 0 1-10 0c0-2.5 1.5-3.5 2-5 1 1.5 2 2 3 2 0-2.5-1-4.5 0-7z"/></svg>`,
   trend: `<svg viewBox="0 0 24 24"><path d="M3 17l6-6 4 4 8-8"/><path d="M15 7h6v6"/></svg>`,
   search: `<svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>`,
+  play: `<svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="12" rx="3"/><path d="m10 9.5 4.5 2.5-4.5 2.5z" fill="currentColor"/></svg>`,
 };
 
 const state = {
@@ -20,6 +21,11 @@ const state = {
   selected: null,
   insight: {},
   filter: "all",
+  kwMode: "rising",
+  compare: [],
+  comparison: null,
+  videos: {},
+  videoKw: null,
   jobs: { total: 0, done: 0, label: "" },
   lab: store.get("fireiq.labTitle", SNAPSHOT?.titles?.[0]?.title ?? ""),
 };
@@ -166,7 +172,13 @@ function all() {
   return (r.candidates ?? merge(r.related, r.seeds)).filter((c) => c.rising != null && c.query !== r.seeds[0])
     .sort((a, b) => (b.breakout - a.breakout) || (b.rise_value - a.rise_value) || ((b.top ?? -1) - (a.top ?? -1)));
 }
-const cand = (q) => all().find((c) => c.query === q) || { query: q, seeds: [] };
+function allKw() {
+  const r = state.result;
+  return r ? (r.candidates ?? merge(r.related, r.seeds)).filter((c) => c.query !== r.seeds[0]) : [];
+}
+// Trends' "top" list: the most-searched related keywords, whether or not they're rising.
+const topKw = () => allKw().filter((c) => c.top != null).sort((a, b) => b.top - a.top);
+const cand = (q) => allKw().find((c) => c.query === q) || { query: q, seeds: [] };
 
 async function research(seeds, opts) {
   if (state.conn && !state.conn.checking && !connected()) { state.blocked = true; setTab("foryou"); return; }
@@ -174,7 +186,7 @@ async function research(seeds, opts) {
   seeds = [...new Set(seeds.map((s) => s.trim().toLowerCase()).filter(Boolean))].slice(0, 6);
   if (!seeds.length) return;
   state.result = { seeds, opts, related: Object.fromEntries(seeds.map((s) => [s, { loading: true }])), live: true };
-  state.selected = null; state.filter = "all"; state.insight = {};
+  state.selected = null; state.filter = "all"; state.insight = {}; state.compare = []; state.comparison = null;
   setTab("foryou");
   await Promise.all(seeds.map(async (seed) => {
     const done = job(`Rising searches for “${seed}”`);
@@ -216,7 +228,7 @@ function openSnapshot(seed) {
   const t = SNAPSHOT.trends;
   state.result = { seeds: [seed], opts: { geo: t.geo, time: t.time, property: t.property }, live: false,
     candidates: t.candidates.filter((c) => c.seeds.includes(seed)).map((c) => ({ ...c, seeds: [seed], top: c.top == null ? null : Number(c.top) })) };
-  state.selected = null; state.filter = "all"; state.insight = {};
+  state.selected = null; state.filter = "all"; state.insight = {}; state.compare = []; state.comparison = null;
   $("q").value = seed;
   setTab("foryou");
 }
@@ -234,74 +246,83 @@ function render() {
   if (state.tab === "lab") return renderLab(v);
   if (state.blocked && !connected()) { v.innerHTML = connectCard(); return; }
   if (!state.result) { v.innerHTML = `<div class="empty">Search for a topic to start.</div>`; return; }
+  renderCompareBar();
   if (state.tab === "keywords") return renderKeywords(v);
+  if (state.tab === "videos") return renderVideos(v);
   renderOverview(v);
 }
 
 const sizeBadge = (n) => (n == null ? `<span class="badge" style="color:var(--dim)">–</span>` : `<span class="badge ${n >= 40 ? "b-green" : n >= 15 ? "b-amber" : "b-red"}">${n}</span>`);
 const change = (c) => (c.breakout ? `<span class="badge b-fire">BREAKOUT</span>` : `<span class="up">↗ ${esc(String(c.rising).replace(/^\+/, ""))}</span>`);
-function table(rows) {
-  if (!rows.length) return `<div class="empty">${state.result.candidates || !Object.values(state.result.related).some((d) => d.loading) ? "No rising searches here." : "Asking Firecrawl Trends…"}</div>`;
-  return `<table class="kwt"><thead><tr><th>Keyword</th><th class="hide-sm">Found under</th><th class="c">Search size</th><th class="r">Volume change</th></tr></thead><tbody>
-    ${rows.map((c) => `<tr data-q="${esc(c.query)}" class="${state.selected === c.query ? "on" : ""}"><td class="kw">${esc(c.query)}</td><td class="hide-sm" style="color:var(--muted)">${esc(c.seeds.join(", "))}</td><td class="c">${sizeBadge(c.top)}</td><td class="r">${change(c)}</td></tr>`).join("")}
+function table(rows, empty = "No rising searches here.") {
+  if (!rows.length) return `<div class="empty">${state.result.candidates || !Object.values(state.result.related).some((d) => d.loading) ? empty : "Asking Firecrawl Trends…"}</div>`;
+  const full = state.compare.length >= 5;
+  return `<table class="kwt"><thead><tr><th class="ck" title="Select up to 5 to compare"></th><th>Keyword</th><th class="hide-sm">Found under</th><th class="c">Search size</th><th class="r">Volume change</th></tr></thead><tbody>
+    ${rows.map((c) => { const on = state.compare.includes(c.query); return `<tr data-q="${esc(c.query)}" class="${state.selected === c.query ? "on" : ""}"><td class="ck"><input type="checkbox" data-ck="${esc(c.query)}" ${on ? "checked" : ""} ${full && !on ? "disabled" : ""} title="Compare"></td><td class="kw">${esc(c.query)}</td><td class="hide-sm" style="color:var(--muted)">${esc(c.seeds.join(", "))}</td><td class="c">${sizeBadge(c.top)}</td><td class="r">${c.rising == null ? `<span style="color:var(--dim)">–</span>` : change(c)}</td></tr>`; }).join("")}
   </tbody></table>`;
 }
 const head = (icon, title, more) => `<div class="sec-h"><h2>${ICON[icon]}${title}</h2>${more ? `<button class="more" data-go="${more}">Show all ${ARROW}</button>` : ""}</div>`;
 
-// Charted on its own, the keyword gets Trends' own 0–100 scale: 100 is its busiest day in the range.
+// One keyword charted alone gets Trends' own 0–100 scale (100 = its busiest day). Several keywords
+// fetched together share one scale, so their lines compare directly.
 const CH = { W: 640, H: 230, L: 40, R: 12, T: 12, B: 30 };
-function chart(interest, query) {
+const WIDE = { ...CH, W: 1240, H: 300 };
+const LINE = ["#2fd36b", "#3b82f6", "#fa5d19", "#c084fc", "#f5b638"];
+const charts = {};
+function chart(interest, keys, id, D = CH) {
   const pts = interest.points.filter((p) => !p.partial);
-  const qi = interest.keywords.indexOf(query);
-  if (!pts.some((p) => p.values[qi] > 0)) return `<div class="empty" style="padding:40px 0;text-align:center">Too few searches to chart yet.<br><span style="color:var(--dim);font-size:13px">Trends marks it as rising, but the volume is still below its 0–100 floor.</span></div>`;
-  const { W, H, L, R, T, B } = CH;
+  const idx = keys.map((k) => interest.keywords.indexOf(k));
+  if (!pts.some((p) => idx.some((i) => p.values[i] > 0))) return `<div class="empty" style="padding:40px 0;text-align:center">Too few searches to chart yet.<br><span style="color:var(--dim);font-size:13px">Trends marks it as rising, but the volume is still below its 0–100 floor.</span></div>`;
+  const { W, H, L, R, T, B } = D;
   const x = (j) => L + (j / Math.max(1, pts.length - 1)) * (W - L - R);
   const y = (v) => T + (1 - v / 100) * (H - T - B);
-  const line = pts.map((p, j) => `${x(j).toFixed(1)},${y(p.values[qi]).toFixed(1)}`).join(" ");
+  const line = (i) => pts.map((p, j) => `${x(j).toFixed(1)},${y(p.values[i]).toFixed(1)}`).join(" ");
   const short = (l) => l.replace(/,?\s*\d{4}$/, "").replace(/\s*–.*$/, "");
   const ticks = [...new Set([0, 0.25, 0.5, 0.75, 1].map((f) => Math.round(f * (pts.length - 1))))];
-  chartState = { pts, qi, x, y };
-  return `<div class="plot" id="plot">
-    <svg viewBox="0 0 ${W} ${H}" id="plotSvg">
-      <defs><linearGradient id="g" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#2fd36b" stop-opacity=".25"/><stop offset="1" stop-color="#2fd36b" stop-opacity="0"/></linearGradient></defs>
+  const avg = (i) => Math.round(pts.reduce((n, p) => n + p.values[i], 0) / pts.length);
+  charts[id] = { pts, keys, idx, x, y, D };
+  return `<div class="plot">
+    <svg viewBox="0 0 ${W} ${H}" id="${id}-svg">
+      <defs><linearGradient id="${id}-g" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="${LINE[0]}" stop-opacity=".25"/><stop offset="1" stop-color="${LINE[0]}" stop-opacity="0"/></linearGradient></defs>
       ${[0, 25, 50, 75, 100].map((v) => `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" stroke="#1f2433"/><text x="${L - 8}" y="${y(v) + 4}" text-anchor="end" class="tick">${v}</text>`).join("")}
       ${ticks.map((j) => `<text x="${x(j)}" y="${H - 8}" text-anchor="${j === 0 ? "start" : j === pts.length - 1 ? "end" : "middle"}" class="tick">${esc(short(pts[j].label))}</text>`).join("")}
-      <polygon points="${x(0)},${y(0)} ${line} ${x(pts.length - 1)},${y(0)}" fill="url(#g)"/>
-      <polyline points="${line}" fill="none" stroke="#2fd36b" stroke-width="2.5" stroke-linejoin="round"/>
-      <line id="hoverLine" y1="${T}" y2="${H - B}" stroke="#8b90a3" stroke-dasharray="3 3" visibility="hidden"/>
-      <circle id="hoverDot" r="5" fill="#2fd36b" stroke="#0b0d14" stroke-width="2" visibility="hidden"/>
-      <rect x="${L}" y="${T}" width="${W - L - R}" height="${H - T - B}" fill="transparent" id="hoverArea"/>
+      ${keys.length === 1 ? `<polygon points="${x(0)},${y(0)} ${line(idx[0])} ${x(pts.length - 1)},${y(0)}" fill="url(#${id}-g)"/>` : ""}
+      ${idx.map((i, n) => `<polyline points="${line(i)}" fill="none" stroke="${LINE[n]}" stroke-width="2.5" stroke-linejoin="round"/>`).join("")}
+      <line id="${id}-hl" y1="${T}" y2="${H - B}" stroke="#8b90a3" stroke-dasharray="3 3" visibility="hidden"/>
+      ${idx.map((_, n) => `<circle id="${id}-dot${n}" r="5" fill="${LINE[n]}" stroke="#0b0d14" stroke-width="2" visibility="hidden"/>`).join("")}
+      <rect x="${L}" y="${T}" width="${W - L - R}" height="${H - T - B}" fill="transparent" id="${id}-area"/>
     </svg>
-    <div class="tip" id="tip"></div>
+    <div class="tip" id="${id}-tip"></div>
   </div>
-  <div class="legend"><span>Search interest, 0–100 (100 = busiest day)</span><span>Average ${Math.round(pts.reduce((n, p) => n + p.values[qi], 0) / pts.length)}</span></div>`;
+  <div class="legend">${keys.length === 1 ? `<span>Search interest, 0–100 (100 = busiest day)</span><span>Average ${avg(idx[0])}</span>`
+    : keys.map((k, n) => `<span><i style="background:${LINE[n]}"></i>${esc(k)} · avg ${avg(idx[n])}</span>`).join("")}</div>`;
 }
-let chartState = null;
-function bindChart() {
-  const svg = $("plotSvg");
-  if (!svg || !chartState) return;
-  const { pts, qi, x, y } = chartState;
-  const area = $("hoverArea"), tip = $("tip"), hl = $("hoverLine"), dot = $("hoverDot");
-  const show = (e) => {
-    const box = svg.getBoundingClientRect();
-    const vx = ((e.clientX - box.left) / box.width) * CH.W;
-    let j = Math.round(((vx - CH.L) / (CH.W - CH.L - CH.R)) * (pts.length - 1));
-    j = Math.max(0, Math.min(pts.length - 1, j));
-    const v = pts[j].values[qi];
-    hl.setAttribute("x1", x(j)); hl.setAttribute("x2", x(j)); hl.setAttribute("visibility", "visible");
-    dot.setAttribute("cx", x(j)); dot.setAttribute("cy", y(v)); dot.setAttribute("visibility", "visible");
-    tip.innerHTML = `<b>${v}</b><span>${esc(pts[j].label)}</span>`;
-    tip.style.display = "block";
-    const px = (x(j) / CH.W) * box.width, py = (y(v) / CH.H) * box.height;
-    tip.style.left = `${Math.min(box.width - tip.offsetWidth, Math.max(0, px - tip.offsetWidth / 2))}px`;
-    tip.style.top = `${Math.max(0, py - tip.offsetHeight - 12)}px`;
-  };
-  area.onmousemove = show;
-  area.onmouseleave = () => { tip.style.display = "none"; hl.setAttribute("visibility", "hidden"); dot.setAttribute("visibility", "hidden"); };
+function bindCharts() {
+  for (const [id, c] of Object.entries(charts)) {
+    const svg = $(`${id}-svg`);
+    if (!svg) { delete charts[id]; continue; }
+    const tip = $(`${id}-tip`), hl = $(`${id}-hl`);
+    const dots = c.idx.map((_, n) => $(`${id}-dot${n}`));
+    $(`${id}-area`).onmousemove = (e) => {
+      const box = svg.getBoundingClientRect();
+      const D = c.D;
+      const vx = ((e.clientX - box.left) / box.width) * D.W;
+      const j = Math.max(0, Math.min(c.pts.length - 1, Math.round(((vx - D.L) / (D.W - D.L - D.R)) * (c.pts.length - 1))));
+      const vals = c.idx.map((i) => c.pts[j].values[i]);
+      hl.setAttribute("x1", c.x(j)); hl.setAttribute("x2", c.x(j)); hl.setAttribute("visibility", "visible");
+      dots.forEach((d, n) => { d.setAttribute("cx", c.x(j)); d.setAttribute("cy", c.y(vals[n])); d.setAttribute("visibility", "visible"); });
+      tip.innerHTML = c.keys.length === 1 ? `<b>${vals[0]}</b><span>${esc(c.pts[j].label)}</span>`
+        : `<div class="tip-date">${esc(c.pts[j].label)}</div>${c.keys.map((k, n) => `<div class="tip-row"><i style="background:${LINE[n]}"></i><span>${esc(k)}</span><b>${vals[n]}</b></div>`).join("")}`;
+      tip.style.display = "block";
+      const px = (c.x(j) / D.W) * box.width, py = (c.y(Math.max(...vals)) / D.H) * box.height;
+      tip.style.left = `${Math.min(box.width - tip.offsetWidth, Math.max(0, px - tip.offsetWidth / 2))}px`;
+      tip.style.top = `${Math.max(0, py - tip.offsetHeight - 12)}px`;
+    };
+    $(`${id}-area`).onmouseleave = () => { tip.style.display = "none"; hl.setAttribute("visibility", "hidden"); dots.forEach((d) => d.setAttribute("visibility", "hidden")); };
+  }
 }
 
 function keywordCard() {
-  chartState = null;
   const q = state.selected;
   if (!q) return "";
   const c = cand(q);
@@ -319,14 +340,48 @@ function keywordCard() {
       </div>
       <div class="acts">
         <button class="btn" data-lab="${esc(q)}">Score as a title</button>
+        <button class="btn ghost" data-videos="${esc(q)}">Top videos</button>
         ${c.explore_url ? `<a class="btn ghost" style="display:inline-flex;align-items:center" href="${esc(c.explore_url)}" target="_blank" rel="noopener">Open in Trends ↗</a>` : ""}
       </div>
     </div>
     <div class="chart"><h4><span>Interest over time</span><span style="color:var(--dim)">hover for daily values</span></h4>
-      ${!ins.interest ? `<div class="skel" style="height:230px"></div>` : ins.interest.error ? (ins.interest.auth ? connectCard(ins.interest.auth) : `<div class="err">${esc(ins.interest.error)}</div>`) : chart(ins.interest, q)}
+      ${!ins.interest ? `<div class="skel" style="height:230px"></div>` : ins.interest.error ? (ins.interest.auth ? connectCard(ins.interest.auth) : `<div class="err">${esc(ins.interest.error)}</div>`) : chart(ins.interest, [q], "kw")}
     </div>
   </div></div>`;
 }
+
+async function runCompare() {
+  const keys = [...state.compare];
+  const r = state.result;
+  state.comparison = { keys, data: null };
+  setTab("foryou");
+  scrollTo({ top: 0, behavior: "smooth" });
+  const done = job(`Comparing ${keys.length} keywords`);
+  try { state.comparison.data = (await api("/api/interest", { keywords: keys.join("|"), ...r.opts })).data; }
+  catch (e) { state.comparison.data = { error: e.message, auth: e.auth }; }
+  done();
+  render();
+}
+function compareCard() {
+  const c = state.comparison;
+  if (!c) return "";
+  return `<div class="sec"><div class="panel chart">
+    <h4><span style="color:var(--text);font-weight:700;font-size:16px">Comparing ${c.keys.length} keywords</span><button class="more" data-cmp="close">Close ✕</button></h4>
+    ${!c.data ? `<div class="skel" style="height:230px"></div>` : c.data.error ? (c.data.auth ? connectCard(c.data.auth) : `<div class="err">${esc(c.data.error)}</div>`) : chart(c.data, c.keys, "cmp", innerWidth > 900 ? WIDE : CH)}
+    <div class="note">All lines share one 0–100 scale, so they compare directly. Hover for daily values.</div>
+  </div></div>`;
+}
+function renderCompareBar() {
+  const n = state.compare.length;
+  $("cmpBar").classList.toggle("open", n > 0 && state.tab !== "lab");
+  document.body.classList.toggle("cmp-open", n > 0 && state.tab !== "lab");
+  $("cmpBar").innerHTML = `<span><b>${n}</b> of 5 selected</span><span class="cmp-keys">${state.compare.map(esc).join(" · ")}</span><button class="btn ghost" data-cmp="clear">Clear</button><button class="btn" data-cmp="run" ${n < 2 ? "disabled" : ""}>${n < 2 ? "Pick 2+ to compare" : "Compare"}</button>`;
+}
+$("cmpBar").onclick = (e) => {
+  const b = e.target.closest("[data-cmp]"); if (!b) return;
+  if (b.dataset.cmp === "clear") { state.compare = []; render(); }
+  if (b.dataset.cmp === "run") runCompare();
+};
 
 function renderOverview(v) {
   const rows = all();
@@ -336,24 +391,84 @@ function renderOverview(v) {
   if (authErr && failed.length === r.seeds.length) { v.innerHTML = connectCard(authErr); return; }
   v.innerHTML = `
     ${failed.length ? `<div class="sec err">No data for: ${esc(failed.join(", "))}. ${esc(r.related[failed[0]].error)}</div>` : ""}
+    ${compareCard()}
     ${keywordCard()}
     <div class="sec">${head("fire", "Breakout keywords", "keywords")}${table(rows.filter((c) => c.breakout).slice(0, 5))}</div>
-    <div class="sec">${head("trend", "Rising keywords", "keywords")}${table(rows.filter((c) => !c.breakout).slice(0, 5))}</div>`;
+    <div class="sec">${head("trend", "Rising keywords", "keywords")}${table(rows.filter((c) => !c.breakout).slice(0, 5))}</div>
+    <div class="sec">${head("search", "Most searched keywords", "keywords:top")}${table(topKw().slice(0, 5), "No related searches yet.")}</div>`;
   wire(v);
-  bindChart();
+  bindCharts();
 }
 function renderKeywords(v) {
   const r = state.result;
-  const rows = all().filter((c) => state.filter === "all" || c.seeds.includes(state.filter));
+  const rows = (state.kwMode === "top" ? topKw() : all()).filter((c) => state.filter === "all" || c.seeds.includes(state.filter));
   v.innerHTML = `<div class="sec">${head("search", `Keywords <span style="color:var(--dim);font-size:14px">${rows.length}</span>`)}
-    <div class="chips">${["all", ...r.seeds].map((s) => `<button class="chip ${state.filter === s ? "on" : ""}" data-f="${esc(s)}">${s === "all" ? "All topics" : esc(s)}</button>`).join("")}</div>
-    ${table(rows)}</div>`;
+    <div class="chips"><span class="seg"><button class="${state.kwMode === "rising" ? "on" : ""}" data-mode="rising">Rising</button><button class="${state.kwMode === "top" ? "on" : ""}" data-mode="top">Most searched</button></span>
+      ${r.seeds.length > 1 ? ["all", ...r.seeds].map((s) => `<button class="chip ${state.filter === s ? "on" : ""}" data-f="${esc(s)}">${s === "all" ? "All topics" : esc(s)}</button>`).join("") : ""}</div>
+    ${table(rows, state.kwMode === "top" ? "No related searches yet." : "No rising searches here.")}</div>`;
   wire(v);
+}
+
+// Videos: YouTube's most-viewed results for a keyword. The outlier multiple compares each video with the
+// median of these results (vidIQ compares with the channel's own average, which needs channel data).
+async function loadVideos(keyword) {
+  state.videoKw = keyword;
+  if (state.videos[keyword]) return render();
+  state.videos[keyword] = { loading: true };
+  render();
+  const done = job(`Top YouTube videos for “${keyword}”`);
+  try { state.videos[keyword] = { list: (await api("/api/videos", { keyword })).data }; }
+  catch (e) { state.videos[keyword] = { error: e.message, auth: e.auth }; }
+  done();
+  render();
+}
+const ytId = (url) => new URL(url).searchParams.get("v");
+function videoCard(v, mult) {
+  const bg = mult >= 3 ? "#e5484d" : mult >= 1.5 ? "#7c5cff" : "rgba(20,24,36,.85)";
+  const s = scoreTitle(v.title, MODEL).score;
+  return `<a class="vcard" href="${esc(v.url)}" target="_blank" rel="noopener"><div class="thumb"><img src="https://i.ytimg.com/vi/${esc(ytId(v.url))}/mqdefault.jpg" alt="" loading="lazy">${mult >= 1.5 ? `<span class="x" style="background:${bg}">${mult >= 10 ? Math.round(mult) : mult.toFixed(1).replace(/\.0$/, "")}x</span>` : ""}</div>
+    <div class="t">${esc(v.title)}</div><div class="m">${fmt(v.views)} views • ${esc(v.age)}${v.channel ? " • " + esc(v.channel) : ""}</div>
+    <div class="m">Title score <span class="badge ${s >= 70 ? "b-green" : s >= 50 ? "b-amber" : "b-red"}" style="min-width:0;padding:1px 6px;font-size:12px">${s}</span></div></a>`;
+}
+function renderVideos(v) {
+  const r = state.result;
+  const kw = state.videoKw || state.selected || r.seeds[0];
+  if (!state.videos[kw] && connected()) { loadVideos(kw); return; }
+  const d = state.videos[kw] || (connected() ? { loading: true } : { error: "Not connected", auth: "missing" });
+  const opts = [...new Set([...r.seeds, ...(state.selected ? [state.selected] : []), kw])];
+  const pick = `<div class="chips">${opts.map((k) => `<button class="chip ${k === kw ? "on" : ""}" data-vk="${esc(k)}">${esc(k)}</button>`).join("")}</div>`;
+  if (d.loading) { v.innerHTML = `<div class="sec">${pick}<div class="grid-videos">${Array.from({ length: 8 }, () => `<div><div class="skel" style="aspect-ratio:16/9;margin-bottom:10px"></div><div class="skel" style="height:13px;margin-bottom:6px"></div><div class="skel" style="height:13px;width:60%"></div></div>`).join("")}</div></div>`; wireVideos(v); return; }
+  if (d.error) { v.innerHTML = `<div class="sec">${pick}${d.auth ? connectCard(d.auth) : `<div class="err">${esc(d.error)}</div>`}</div>`; wireVideos(v); return; }
+  const list = d.list;
+  const sorted = list.map((x) => x.views).sort((a, b) => a - b);
+  const median = sorted[Math.floor(sorted.length / 2)] || 1;
+  const outliers = list.map((x) => ({ x, m: x.views / median })).filter((o) => o.m >= 1.5).sort((a, b) => b.m - a.m);
+  v.innerHTML = `<div class="sec">${pick}</div>
+    <div class="sec">${head("fire", `Outlier videos for <em>${esc(kw)}</em>`)}
+      ${outliers.length ? `<div class="row-scroll">${outliers.map((o) => videoCard(o.x, o.m)).join("")}</div>` : `<div class="empty">No video here gets more than 1.5x the typical views.</div>`}
+      <div class="note">Views compared with the median of YouTube's top results for this keyword (${fmt(median)} views).</div></div>
+    <div class="sec">${head("play", `Thumbnails <span style="color:var(--dim);font-size:14px">${list.length}</span>`)}
+      ${list.length ? `<div class="grid-videos">${list.map((x) => videoCard(x, x.views / median)).join("")}</div>` : `<div class="empty">YouTube returned no on-topic videos for this keyword.</div>`}</div>`;
+  wireVideos(v);
+}
+function wireVideos(v) {
+  v.onclick = (e) => { const k = e.target.closest("[data-vk]"); if (k) loadVideos(k.dataset.vk); };
 }
 function wire(v) {
   v.onclick = (e) => {
     const t = e.target;
-    const go = t.closest("[data-go]"); if (go) return setTab(go.dataset.go);
+    const ck = t.closest("[data-ck]");
+    if (ck) {
+      const q = ck.dataset.ck;
+      state.compare = ck.checked ? [...state.compare, q].slice(0, 5) : state.compare.filter((x) => x !== q);
+      return render();
+    }
+    if (t.closest("td.ck")) return;
+    const go = t.closest("[data-go]");
+    if (go) { const [tab, mode] = go.dataset.go.split(":"); state.kwMode = mode || "rising"; return setTab(tab); }
+    const mode = t.closest("[data-mode]"); if (mode) { state.kwMode = mode.dataset.mode; return render(); }
+    const vid = t.closest("[data-videos]"); if (vid) { state.videoKw = vid.dataset.videos; return setTab("videos"); }
+    const cmp = t.closest("[data-cmp]"); if (cmp?.dataset.cmp === "close") { state.comparison = null; return render(); }
     const f = t.closest("[data-f]"); if (f) { state.filter = f.dataset.f; return render(); }
     const lab = t.closest("[data-lab]"); if (lab) { state.lab = lab.dataset.lab; return setTab("lab"); }
     const row = t.closest("[data-q]"); if (row) { if (state.tab !== "foryou") setTab("foryou"); select(row.dataset.q, true); }

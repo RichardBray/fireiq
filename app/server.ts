@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { related, interest, youtubeTop, account, type Opts } from "./lib/fireiq";
 import { SdkError } from "firecrawl";
-import { suggestTitles } from "./lib/titles";
+import { suggestTitles, relevant } from "./lib/titles";
 
 const PORT = Number(process.env.PORT ?? 4321);
 const ROOT = import.meta.dir;
@@ -39,6 +39,13 @@ const routes: Record<string, (q: URLSearchParams, key: string, fresh: boolean) =
   "/api/interest": (q, key, fresh) => {
     const o = opts(q), keywords = (q.get("keywords") ?? "").split("|").filter(Boolean);
     return cached({ interest: { keywords, ...o } }, fresh, () => interest(key, keywords, o));
+  },
+  // The same YouTube scrape as title research, so a keyword's videos and titles share one cache entry.
+  "/api/videos": async (q, key, fresh) => {
+    const keyword = (q.get("keyword") ?? "").trim();
+    if (!keyword) throw new Error("Pick a keyword first");
+    const research = await cached({ youtubeTop: keyword.toLowerCase() }, fresh, () => youtubeTop(key, keyword));
+    return { data: relevant(keyword, research.data), credits: research.credits, cached: research.cached };
   },
   "/api/titles": async (q, key, fresh) => {
     const keyword = (q.get("keyword") ?? "").trim(), tool = (q.get("tool") ?? "").trim();
