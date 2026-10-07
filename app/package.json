@@ -1,13 +1,15 @@
 {
   "name": "fireiq-app",
-  "private": true,
   "devDependencies": {
-    "@types/bun": "latest"
+    "@cloudflare/workers-types": "^5.20261007.1",
+    "@types/bun": "latest",
+    "wrangler": "^4.148.0"
   },
   "peerDependencies": {
     "typescript": "^7"
   },
+  "private": true,
   "dependencies": {
-    "firecrawl": "4.44.1"
+    "hono": "^4.13.13"
   }
 }

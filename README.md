@@ -12,7 +12,7 @@ Planned: `title-research` (top-performing titles for a topic), `title-score` (of
 
 ## App
 
-[`app/`](app) is a vidIQ-style web app on the same data: rising YouTube searches, interest-over-time charts, a live title scorer and title suggestions from the most-viewed videos for a keyword. It runs on your own Firecrawl account: `cd app && bun install && bun server.ts`. See [app/README.md](app/README.md).
+[`app/`](app) is a vidIQ-style web app on the same data: rising YouTube searches, interest-over-time charts, a live title scorer and title suggestions from the most-viewed videos for a keyword. It runs on your own Firecrawl account, on Cloudflare Workers: `cd app && bun install && bunx wrangler dev`. See [app/README.md](app/README.md).
 
 ## Install
 

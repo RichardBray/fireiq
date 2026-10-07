@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://api.fontshare.com; font-src https://cdn.fontshare.com; img-src 'self' https://i.ytimg.com data:; connect-src 'self'; base-uri 'self'; form-action 'self'; object-src 'none'">
 <title>fireIQ</title>
 <link rel="icon" href="firecrawl-logo.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://api.fontshare.com">
@@ -37,6 +38,10 @@ a { color: inherit; text-decoration: none; }
 .who b { color: var(--text); font-weight: 700; }
 .who .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 3px rgba(47, 211, 107, .18); }
 .who.off .dot { background: var(--red); box-shadow: 0 0 0 3px rgba(240, 82, 82, .18); }
+.linkish { background: none; border: 0; color: var(--muted); font-size: 13.5px; text-decoration: underline; text-decoration-color: var(--line); cursor: pointer; padding: 4px; }
+.linkish:hover { color: var(--text); }
+.remember { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13.5px; margin: -4px 0 12px; cursor: pointer; }
+.remember input { width: auto; height: auto; margin: 0; accent-color: var(--accent); }
 .connect { border: 1px solid var(--line); border-radius: 14px; background: var(--card); padding: 40px 24px; text-align: center; margin-top: 24px; }
 .connect .big { height: 44px; margin-bottom: 12px; }
 .connect h3 { margin: 0 0 8px; font-size: 20px; }
@@ -254,6 +259,6 @@ td .sub { color: var(--dim); font-size: 13px; margin-left: 8px; }
 <script src="model.js"></script>
 <script src="score.js"></script>
 <script src="data.js"></script>
-<script src="app.js"></script>
+<script type="module" src="app.js"></script>
 </body>
 </html>

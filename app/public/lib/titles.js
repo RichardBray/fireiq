@@ -1,15 +1,11 @@
-// Title suggestions without an LLM, following the title-research skill's steps:
-// 1. research: the most-viewed YouTube videos for the keyword (youtubeTop in lib/fireiq.ts)
+// Title suggestions, following the title-research skill's steps:
+// 1. research: the most-viewed YouTube videos for the keyword (youtubeTop in firecrawl.js)
 // 2. patterns: which title patterns those videos use, weighted by their views
-// 3. generate: fill the winning patterns in for the keyword, and adapt the top titles themselves
+// 3. generate: titles written by Firecrawl's language model (titleIdeas), or, if that fails, the
+//    templates below filled in for the keyword, plus the top titles adapted to the viewer's tool
 // 4. rank: score every candidate with title-score, then pick 5 with different patterns. Picks are
 //    sampled from the strongest candidates, so "Suggest 5 more" gives new titles, not the same 5.
-import type { TopVideo, TitleIdeas } from "./fireiq";
-
-export type Suggestion = { title: string; pattern: string; score: number; inspired_by: string; inspired_url: string | null; inspired_views: number | null };
-export type Pattern = { name: string; share: number; videos: number };
-
-const DETECTORS: Record<string, RegExp> = {
+const DETECTORS = {
   "How to": /\bhow to\b/i,
   "Best": /\bbest\b/i,
   "Versus": /\bvs\.?\b|\bversus\b/i,
@@ -27,14 +23,12 @@ const DETECTORS: Record<string, RegExp> = {
 // "I did X" and "You" are always in the pool even when the field doesn't use them: title-score's
 // minimal-pair tests found these framings move vidIQ's score the most.
 const LEVERS = new Set(["I did X", "You"]);
-
 const ACRONYMS = new Set(["ai", "llm", "llms", "mcp", "api", "seo", "ui", "ux", "gpt", "cli", "sdk", "ide", "pdf", "rag", "lm"]);
 const GENERIC = new Set(["alternative", "alternatives", "tutorial", "guide", "best", "free", "tool", "tools", "review", "vs", "how", "ai", "app", "for", "the", "a", "to", "with", "and", "in", "of"]);
 const STOP = new Set([...GENERIC, "an", "or", "on", "is", "it", "this", "that", "youtube", "full", "new", "my", "your", "you", "i", "get", "more", "views", "honest", "amazing", "better", "than", "lifetime", "deal", "live", "features", "course", "beginners", "explained", "use", "using", "what", "why", "which", "run", "running", "local", "locally", "model", "models", "install", "setup", "windows", "mac", "easy", "step", "steps", "ultimate", "complete", "ways", "make", "build", "now", "here", "every", "everything", "just", "can", "will", "top", "easiest", "fastest", "official", "growth", "pro", "version", "max", "learn", "become", "minutes", "hours", "under", "changed", "forever", "instead", "people", "getting", "started", "compared"]);
-const escRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-
+const escRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 // Keep on-topic, mostly-English results: at least one of the keyword's distinctive words must appear.
-export function relevant(keyword: string, videos: TopVideo[]) {
+export function relevant(keyword, videos) {
   const words = keyword.toLowerCase().split(/\s+/).filter((w) => w && !["the", "a", "for", "to", "with", "and", "of", "in"].includes(w));
   const need = words.filter((w) => !GENERIC.has(w));
   const req = need.length ? need : words;
@@ -44,52 +38,52 @@ export function relevant(keyword: string, videos: TopVideo[]) {
     return latin > 0.7 && req.some((w) => new RegExp(`\\b${escRe(w)}`, "i").test(v.title));
   });
 }
-
-function casing(keyword: string, real: TopVideo[]) {
-  const seen = new Map<string, Map<string, number>>();
-  for (const r of real) for (const w of r.title.match(/[A-Za-z0-9][A-Za-z0-9.+#-]*/g) ?? []) {
-    const m = seen.get(w.toLowerCase()) ?? new Map();
-    m.set(w, (m.get(w) ?? 0) + 1);
-    seen.set(w.toLowerCase(), m);
-  }
+function casing(keyword, real) {
+  const seen = new Map();
+  for (const r of real)
+    for (const w of r.title.match(/[A-Za-z0-9][A-Za-z0-9.+#-]*/g) ?? []) {
+      const m = seen.get(w.toLowerCase()) ?? new Map();
+      m.set(w, (m.get(w) ?? 0) + 1);
+      seen.set(w.toLowerCase(), m);
+    }
   return keyword.split(/\s+/).filter(Boolean).map((w) => {
-    if (ACRONYMS.has(w.toLowerCase())) return w.toUpperCase();
+    if (ACRONYMS.has(w.toLowerCase()))
+      return w.toUpperCase();
     const mixed = [...(seen.get(w.toLowerCase())?.entries() ?? [])].filter(([f]) => /[a-z]/.test(f) && /[A-Z]/.test(f.slice(1)));
     // A lowercase-first brand spelling ("vidIQ") is deliberate; "VidIQ" is usually just title case.
     const brand = mixed.filter(([f]) => /^[a-z]/.test(f));
-    if (brand.length) return brand.sort((a, b) => b[1] - a[1])[0][0];
-    if (mixed.length) return mixed.sort((a, b) => b[1] - a[1])[0][0];
+    if (brand.length)
+      return brand.sort((a, b) => b[1] - a[1])[0][0];
+    if (mixed.length)
+      return mixed.sort((a, b) => b[1] - a[1])[0][0];
     return w[0].toUpperCase() + w.slice(1);
   }).join(" ");
 }
-
 // Products other videos name alongside the keyword ("TubeBuddy" for vidIQ): recurring capitalised words.
-function competitors(keyword: string, real: TopVideo[]) {
+function competitors(keyword, real) {
   const own = new Set(keyword.toLowerCase().split(/\s+/));
-  const counts = new Map<string, number>();
-  for (const r of real) for (const w of new Set(r.title.match(/\b[A-Z][A-Za-z0-9]+\b/g) ?? [])) {
-    const l = w.toLowerCase();
-    if (own.has(l) || STOP.has(l) || /^20\d\d$/.test(w) || ACRONYMS.has(l)) continue;
-    counts.set(w, (counts.get(w) ?? 0) + 1);
-  }
+  const counts = new Map();
+  for (const r of real)
+    for (const w of new Set(r.title.match(/\b[A-Z][A-Za-z0-9]+\b/g) ?? [])) {
+      const l = w.toLowerCase();
+      if (own.has(l) || STOP.has(l) || /^20\d\d$/.test(w) || ACRONYMS.has(l))
+        continue;
+      counts.set(w, (counts.get(w) ?? 0) + 1);
+    }
   return [...counts.entries()].filter(([w, n]) => n >= 3 || (n >= 2 && /[A-Z]/.test(w.slice(1)))).sort((a, b) => b[1] - a[1]).map(([w]) => w);
 }
-
-export function patterns(real: TopVideo[]): Pattern[] {
+export function patterns(real) {
   const total = real.reduce((n, v) => n + v.views, 0) || 1;
   return Object.entries(DETECTORS)
     .map(([name, re]) => { const hits = real.filter((v) => re.test(v.title)); return { name, videos: hits.length, share: hits.reduce((n, v) => n + v.views, 0) / total }; })
     .filter((p) => p.videos > 0)
     .sort((a, b) => b.share - a.share);
 }
-
-type Templates = [string, (string | false | null)[]][];
-const an = (w: string) => (/^[A-Z]{2,}/.test(w) ? /^[AEFHILMNORSX]/.test(w) : /^[aeiou]/i.test(w)) ? `an ${w}` : `a ${w}`;
-const title = (s: string) => s.replace(/\b([a-z])/g, (m) => m.toUpperCase());
-
+const an = (w) => (/^[A-Z]{2,}/.test(w) ? /^[AEFHILMNORSX]/.test(w) : /^[aeiou]/i.test(w)) ? `an ${w}` : `a ${w}`;
+const title = (s) => s.replace(/\b([a-z])/g, (m) => m.toUpperCase());
 // "jev vs llm": a comparison, so the templates talk about both sides instead of treating the whole
 // query as one product name.
-function versusTemplates(A: string, B: string, T: string | null, Y: number): Templates {
+function versusTemplates(A, B, T, Y) {
   // A bare acronym on the right is usually a category ("LLM"), which reads better as a plural.
   const Bs = /^[A-Z]{2,5}$/.test(B) ? `${B}s` : B;
   return [
@@ -106,9 +100,8 @@ function versusTemplates(A: string, B: string, T: string | null, Y: number): Tem
     ["Question", [`Is ${A} Better Than ${an(B)}?`, `Why Is Everyone Switching From ${Bs} To ${A}?`]],
   ];
 }
-
 // "how to scrape a website": a task, so it's framed as one rather than as a product to "use".
-function taskTemplates(task: string, T: string | null, Y: number): Templates {
+function taskTemplates(task, T, Y) {
   const t = title(task);
   return [
     ["How to", [`How To ${t} (Step By Step)`, `How To ${t} For FREE In ${Y}`, T && `How To ${t} With ${T}`]],
@@ -123,9 +116,8 @@ function taskTemplates(task: string, T: string | null, Y: number): Templates {
     ["Question", [`What's The Best Way To ${t}?`]],
   ];
 }
-
 // A long phrase that isn't a name ("ai agents for small business"): framed as a topic.
-function topicTemplates(K: string, T: string | null, Y: number): Templates {
+function topicTemplates(K, T, Y) {
   return [
     ["How to", [`How To Get Started With ${K}`]],
     ["Best", [`The Best Guide To ${K} In ${Y}`]],
@@ -137,8 +129,7 @@ function topicTemplates(K: string, T: string | null, Y: number): Templates {
     ["Question", [`Is ${K} Worth It In ${Y}?`]],
   ];
 }
-
-function templates(K: string, base: string | null, C: string | null, T: string | null, Y: number): Templates {
+function templates(K, base, C, T, Y) {
   const alt = !!base;
   const B = base ?? K;
   const S = alt && T ? T : K;
@@ -156,20 +147,20 @@ function templates(K: string, base: string | null, C: string | null, T: string |
     ["Question", [alt && T ? `Is ${T} Better Than ${B}?` : `Is ${K} Worth It In ${Y}?`, `Why Is Everyone Switching To ${S}?`]],
   ];
 }
-
 // Rewrite a top title for this video: bring its year up to date and swap the product it names for the
 // viewer's tool. Without a tool there's nothing to swap, so it would just copy the original.
-function adapt(v: TopVideo, keyword: string, K: string, base: string | null, C: string | null, T: string | null, Y: number) {
-  if (!T) return null;
+function adapt(v, keyword, K, base, C, T, Y) {
+  if (!T)
+    return null;
   let t = v.title.replace(/\b20\d\d\b/g, String(Y)).replace(/\s*[|–—-]\s*(honest review|official.*|full video)$/i, "").trim();
   const before = t;
   const target = base && C ? C : base ?? C;
   t = target ? t.replace(new RegExp(`\\b${escRe(target)}\\b`, "i"), T) : t.replace(new RegExp(escRe(keyword), "i"), T);
-  if (t === before || t.length > 80) return null;
+  if (t === before || t.length > 80)
+    return null;
   return t.replace(new RegExp(escRe(keyword), "i"), K);
 }
-
-export function suggestTitles(keyword: string, tool: string, videos: TopVideo[], score: (t: string) => number, exclude: string[] = [], ideas: TitleIdeas | null = null, year = new Date().getFullYear()) {
+export function suggestTitles(keyword, tool, videos, score, exclude = [], ideas = null, year = new Date().getFullYear()) {
   const real = relevant(keyword, videos);
   const pats = patterns(real);
   const share = new Map(pats.map((p) => [p.name, p.share]));
@@ -178,13 +169,13 @@ export function suggestTitles(keyword: string, tool: string, videos: TopVideo[],
   const base = alt ? casing(alt[1], real) : null;
   const C = competitors(alt ? alt[1] : keyword, real)[0] ?? null;
   const T = tool.trim() || null;
-  const top = (p: string) => real.filter((v) => DETECTORS[p]?.test(v.title)).sort((a, b) => b.views - a.views)[0];
-
-  const pool: Suggestion[] = [];
-  const add = (title: string, pattern: string, src: TopVideo | undefined) => {
+  const top = (p) => real.filter((v) => DETECTORS[p]?.test(v.title)).sort((a, b) => b.views - a.views)[0];
+  const pool = [];
+  const add = (title, pattern, src) => {
     title = title.replace(/\s+/g, " ").trim();
     const l = title.toLowerCase();
-    if (title.length > 80 || pool.some((s) => s.title.toLowerCase() === l) || real.some((v) => v.title.toLowerCase() === l)) return;
+    if (title.length > 80 || pool.some((s) => s.title.toLowerCase() === l) || real.some((v) => v.title.toLowerCase() === l))
+      return;
     pool.push({ title, pattern, score: score(title), inspired_by: src?.title ?? "", inspired_url: src?.url || null, inspired_views: src?.views || null });
   };
   const vs = keyword.trim().match(/^(.+?)\s+(?:vs\.?|versus|or)\s+(.+)$/i);
@@ -192,32 +183,35 @@ export function suggestTitles(keyword: string, tool: string, videos: TopVideo[],
   const words = keyword.trim().split(/\s+/).length;
   const set = vs ? versusTemplates(casing(vs[1], real), casing(vs[2], real), T, year)
     : task ? taskTemplates(task[1], T, year)
-    : !alt && words >= 4 ? topicTemplates(K, T, year)
-    : templates(K, base, C, T, year);
+      : !alt && words >= 4 ? topicTemplates(K, T, year)
+        : templates(K, base, C, T, year);
   // Titles written by the language model come first; the templates only fill in when it returned too few.
-  const patternOf = (t: string) => Object.keys(DETECTORS).find((p) => !["Year", "Brackets"].includes(p) && DETECTORS[p].test(t)) ?? "Fresh angle";
-  const findVideo = (title: string) => { const l = title.toLowerCase().slice(0, 40); return real.find((v) => v.title.toLowerCase().startsWith(l)) ?? videos.find((v) => v.title.toLowerCase().startsWith(l)); };
+  const patternOf = (t) => Object.keys(DETECTORS).find((p) => !["Year", "Brackets"].includes(p) && DETECTORS[p].test(t)) ?? "Fresh angle";
+  const findVideo = (title) => { const l = title.toLowerCase().slice(0, 40); return real.find((v) => v.title.toLowerCase().startsWith(l)) ?? videos.find((v) => v.title.toLowerCase().startsWith(l)); };
   for (const i of ideas?.titles ?? []) {
     const src = findVideo(i.inspired_by);
-    add(i.title.replace(/!+/g, "!"), patternOf(i.title), src ?? ({ title: i.inspired_by, url: "", views: 0 } as TopVideo));
+    add(i.title.replace(/!+/g, "!"), patternOf(i.title), src ?? { title: i.inspired_by, url: "", views: 0 });
   }
   const fromIdeas = pool.length;
   if (fromIdeas < 8) {
     for (const [p, list] of set) {
-      if (!share.has(p) && !LEVERS.has(p)) continue;
-      for (const t of list) if (t) add(t, p, top(p));
+      if (!share.has(p) && !LEVERS.has(p))
+        continue;
+      for (const t of list)
+        if (t)
+          add(t, p, top(p));
     }
     for (const v of real.slice(0, 15)) {
       const t = adapt(v, keyword, K, base, C, T, year);
-      if (t) add(t, "Adapted top video", v);
+      if (t)
+        add(t, "Adapted top video", v);
     }
   }
-
   // Weight each candidate by its score and by the share of the field's views its pattern earns.
-  const weight = (s: Suggestion) => Math.exp((s.score - 80) / 5) * (1 + 3 * (share.get(s.pattern) ?? (s.pattern === "Adapted top video" ? 0.5 : 0.1)));
+  const weight = (s) => Math.exp((s.score - 80) / 5) * (1 + 3 * (share.get(s.pattern) ?? (s.pattern === "Adapted top video" ? 0.5 : 0.1)));
   const unseen = pool.filter((s) => !exclude.some((e) => e.toLowerCase() === s.title.toLowerCase()));
   const candidates = (unseen.length >= 5 ? unseen : pool).sort((a, b) => b.score - a.score).slice(0, 18);
-  const picked: Suggestion[] = [];
+  const picked = [];
   while (picked.length < 5 && candidates.length) {
     const avail = candidates.filter((s) => !picked.some((p) => p.pattern === s.pattern));
     const from = avail.length ? avail : candidates;

@@ -1,3 +1,6 @@
+import * as fc from "./lib/firecrawl.js";
+import { suggestTitles, relevant } from "./lib/titles.js";
+
 const MODEL = window.TITLE_MODEL;
 const SNAPSHOT = window.FIREIQ;
 const $ = (id) => document.getElementById(id);
@@ -31,52 +34,39 @@ const state = {
 };
 
 // ---------- data ----------
-async function api(path, params, fresh = false) {
-  const auth = store.get("fireiq.auth", null);
-  const r = await fetch(`${path}?${new URLSearchParams({ ...params, ...(fresh ? { fresh: "1" } : {}) })}`, { headers: keyHeaders() });
-  const j = await r.json();
-  if (!r.ok || j.error) {
-    const err = new Error(j.error || r.statusText);
-    err.auth = j.auth;
-    if (j.auth) checkConnection();
-    throw err;
-  }
-  return j;
+// Firecrawl calls go through the Worker; an auth problem refreshes the nav so it shows what's wrong.
+async function call(p) {
+  try { return await p; }
+  catch (e) { if (e.auth) checkConnection(); throw e; }
 }
 
 // ---------- account ----------
-// state.conn comes from /api/me, which checks the key with Firecrawl rather than trusting what's saved.
-function keyHeaders() {
-  const auth = store.get("fireiq.auth", null);
-  return { ...(auth?.apiKey ? { "x-firecrawl-key": auth.apiKey } : {}), ...(store.get("fireiq.noServerKey", false) ? { "x-fireiq-no-server-key": "1" } : {}) };
-}
+// /api/me checks the cookie's key with Firecrawl, so the nav reflects what actually works.
 async function checkConnection() {
-  const auth = store.get("fireiq.auth", null);
   state.conn = { checking: true };
   renderAccount();
-  try {
-    state.conn = await (await fetch("/api/me", { headers: keyHeaders() })).json();
-  } catch {
-    state.conn = { connected: false, error: "Can't reach the fireIQ server." };
-  }
+  try { state.conn = await (await fetch("/api/me")).json(); }
+  catch { state.conn = { connected: false, error: "Can't reach fireIQ." }; }
   renderAccount();
-  if (state.conn.connected) { state.blocked = false; render(); }
+  if (state.conn.connected) {
+    state.blocked = false;
+    // Connecting after the saved snapshot was shown: swap it for live results.
+    if (state.result && !state.result.live) research(parseSeeds($("q").value), opts(), true);
+    else render();
+  }
+  return state.conn;
 }
+const SIGN_IN = `<button class="btn" data-connect="signin"><img class="fcmark" src="firecrawl-logo.svg" alt="">Sign in<span class="long"> with Firecrawl</span></button>`;
 function renderAccount() {
-  const auth = store.get("fireiq.auth", null);
   const c = state.conn || { checking: true };
   const credits = c.remainingCredits != null ? `${c.remainingCredits.toLocaleString()} credits left` : "";
-  const buttons = `<button class="btn ghost ghost-key" id="addKey">Add API key</button><button class="btn" id="signIn"><img class="fcmark" src="firecrawl-logo.svg" alt="">Sign in<span class="long"> with Firecrawl</span></button>`;
   $("account").innerHTML = c.checking
     ? `<span class="who"><span class="spin"></span>Checking Firecrawl…</span>`
     : c.connected
-      ? `<span class="who" title="${c.source === "server" ? "Using the server's FIRECRAWL_API_KEY" : "Using the key saved in this browser"}"><span class="dot"></span><b>${esc(c.source === "server" ? "Connected" : auth?.teamName && auth.teamName !== "API key" ? auth.teamName : "Connected")}</b><span class="k">${c.source === "server" ? "server key · " : ""}${credits}</span></span><button class="btn ghost" id="signOut">Disconnect</button>`
-      : `<span class="who off"><span class="dot"></span>${c.rejected ? "Key rejected" : "Not connected"}</span>${c.serverKeyAvailable ? `<button class="btn ghost" id="useServer">Reconnect</button>` : ""}${buttons}`;
-  $("account").onclick = (e) => {
-    if (e.target.closest("#signOut")) { store.set("fireiq.auth", null); store.set("fireiq.noServerKey", true); checkConnection(); }
-    if (e.target.closest("#useServer")) { store.set("fireiq.noServerKey", false); checkConnection(); }
-    if (e.target.closest("#addKey")) openKey();
-    if (e.target.closest("#signIn")) signIn();
+      ? `<span class="who"><span class="dot"></span><b>${esc(c.teamName && c.teamName !== "API key" ? c.teamName : "Connected")}</b><span class="k">${credits}</span></span><button class="btn ghost" id="signOut">Disconnect</button>`
+      : `<span class="who off"><span class="dot"></span>${c.rejected ? "Key rejected" : "Not connected"}</span>${SIGN_IN}`;
+  $("account").onclick = async (e) => {
+    if (e.target.closest("#signOut")) { await fetch("/api/auth/logout", { method: "POST" }); checkConnection(); }
   };
 }
 const connected = () => !!state.conn?.connected;
@@ -84,11 +74,11 @@ function connectCard(reason) {
   const rejected = reason === "rejected" || state.conn?.rejected;
   const title = reason === "credits" ? "Your Firecrawl account is out of credits" : rejected ? "Firecrawl rejected your API key" : "Connect Firecrawl to run live research";
   const body = reason === "credits" ? "Add credits or upgrade your plan on firecrawl.dev, then try again."
-    : rejected ? "The saved key no longer works. Sign in again or paste a new key."
+    : rejected ? "That key no longer works. Sign in again to connect."
     : "fireIQ runs every search on your own Firecrawl account. The free plan includes 1,000 credits a month, and a search costs about 5 credits per topic.";
   return `<div class="connect"><img src="firecrawl-logo.svg" alt="" class="big"><h3>${title}</h3><p>${body}</p>
     ${reason === "credits" ? `<a class="btn" href="https://www.firecrawl.dev/app" target="_blank" rel="noopener" style="display:inline-flex;align-items:center">Open Firecrawl</a>`
-      : `<div class="acts"><button class="btn" data-connect="signin"><img class="fcmark" src="firecrawl-logo.svg" alt="">Sign in with Firecrawl</button><button class="btn ghost" data-connect="key">Add API key</button></div>`}</div>`;
+      : `<div class="acts" style="flex-direction:column;align-items:center"><button class="btn" data-connect="signin"><img class="fcmark" src="firecrawl-logo.svg" alt="">Sign in with Firecrawl</button><button class="linkish" data-connect="key">Use an API key instead</button></div>`}</div>`;
 }
 document.addEventListener("click", (e) => {
   const c = e.target.closest("[data-connect]");
@@ -100,27 +90,22 @@ function modal(html) {
 }
 function closeModal() { $("modal").classList.remove("open"); signInRun = null; }
 $("modal").onclick = (e) => { if (e.target === $("modal") || e.target.closest("[data-close]")) closeModal(); };
-function openSignIn() {
-  if ($("modal").classList.contains("open")) return;
-  modal(`<h3>Connect Firecrawl</h3><p>Live research runs on your own Firecrawl account. The free plan includes 1,000 credits a month.</p>
-    <div class="row" style="justify-content:stretch;flex-direction:column"><button class="btn" id="mSignIn" style="height:44px"><img class="fcmark" src="firecrawl-logo.svg" alt="">Sign in with Firecrawl</button><button class="btn ghost" id="mKey" style="height:44px">Add an API key instead</button></div>`);
-  $("mSignIn").onclick = signIn;
-  $("mKey").onclick = openKey;
-}
+const REMEMBER = `<label class="remember"><input type="checkbox" id="remember" checked> Keep me signed in on this device</label>`;
 function openKey() {
-  modal(`<h3>Add your Firecrawl API key</h3><p>Find it at <a href="https://www.firecrawl.dev/app/api-keys" target="_blank" rel="noopener">firecrawl.dev/app/api-keys</a>. It's kept in this browser and sent only to this app's server, which uses it to call Firecrawl.</p>
-    <form id="keyForm"><input id="keyIn" placeholder="fc-..." autocomplete="off" spellcheck="false"><div class="row"><button type="button" class="btn ghost" data-close>Cancel</button><button class="btn" type="submit">Save key</button></div></form>`);
+  modal(`<h3>Use a Firecrawl API key</h3><p>Create one at <a href="https://www.firecrawl.dev/app/api-keys" target="_blank" rel="noopener">firecrawl.dev/app/api-keys</a>. It's stored encrypted in a cookie that this page's scripts can't read, and only used to call Firecrawl. A separate key for fireIQ is easiest to revoke.</p>
+    <form id="keyForm"><input id="keyIn" placeholder="fc-..." autocomplete="off" spellcheck="false">${REMEMBER}<div class="err" id="keyErr"></div><div class="row"><button type="button" class="btn ghost" data-close>Cancel</button><button class="btn" type="submit">Connect</button></div></form>`);
   $("keyIn").focus();
-  $("keyForm").onsubmit = (e) => {
+  $("keyForm").onsubmit = async (e) => {
     e.preventDefault();
-    const k = $("keyIn").value.trim();
-    if (!/^fc-[A-Za-z0-9]+$/.test(k)) { $("keyIn").style.borderColor = "var(--red)"; return; }
-    store.set("fireiq.auth", { apiKey: k, teamName: "API key" });
+    const r = await fetch("/api/auth/key", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ apiKey: $("keyIn").value.trim(), remember: $("remember").checked }) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { $("keyErr").textContent = j.error || "Couldn't connect."; $("keyIn").style.borderColor = "var(--red)"; return; }
     closeModal(); checkConnection();
   };
 }
 
-// Firecrawl's browser sign-in (the flow its CLI uses): PKCE challenge in the URL, then poll for the key.
+// Firecrawl's browser sign-in (the flow its CLI uses): PKCE challenge in the URL, then the Worker polls
+// for the key and keeps it in the cookie, so the page only learns that sign-in finished.
 let signInRun = null;
 const b64url = (bytes) => btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 async function signIn() {
@@ -131,17 +116,14 @@ async function signIn() {
   window.open(`https://www.firecrawl.dev/cli-auth?code_challenge=${challenge}&source=coding-agent#session_id=${session}`, "fireiq-auth", "width=520,height=720");
   const run = (signInRun = {});
   modal(`<h3>Finish signing in</h3><p>Sign in or create a free account in the Firecrawl window. This updates by itself when you're done.</p>
-    <div class="status" style="margin-bottom:16px"><span class="spin"></span>Waiting for Firecrawl…</div><div class="row"><button class="btn ghost" data-close>Cancel</button></div>`);
+    ${REMEMBER}<div class="status" style="margin:14px 0 16px"><span class="spin"></span>Waiting for Firecrawl…</div><div class="row"><button class="linkish" data-connect="key" style="margin-right:auto">Use an API key instead</button><button class="btn ghost" data-close>Cancel</button></div>`);
   const until = Date.now() + 10 * 60 * 1000;
   while (signInRun === run && Date.now() < until) {
     await new Promise((r) => setTimeout(r, 2000));
     try {
-      const r = await (await fetch("/api/auth/status", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ session_id: session, code_verifier: verifier }) })).json();
-      if (r.status === "complete" && r.apiKey) {
-        store.set("fireiq.auth", { apiKey: r.apiKey, teamName: r.teamName || "Firecrawl" });
-        closeModal(); checkConnection();
-        return;
-      }
+      const remember = $("remember")?.checked ?? true;
+      const r = await (await fetch("/api/auth/poll", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ session_id: session, code_verifier: verifier, remember }) })).json();
+      if (r.status === "complete") { closeModal(); checkConnection(); return; }
     } catch {}
   }
 }
@@ -185,7 +167,7 @@ const cand = (q) => allKw().find((c) => c.query === q) || { query: q, seeds: [] 
 const related = new Map();
 function relatedReq(seed, o) {
   const key = JSON.stringify([seed, o]);
-  if (!related.has(key)) related.set(key, api("/api/related", { keyword: seed, ...o }).catch((e) => { related.delete(key); throw e; }));
+  if (!related.has(key)) related.set(key, call(fc.related(seed, o)).catch((e) => { related.delete(key); throw e; }));
   return related.get(key);
 }
 const parseSeeds = (text) => [...new Set(text.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean))].slice(0, 6);
@@ -194,14 +176,14 @@ function prefetch() {
   for (const seed of parseSeeds($("q").value)) if (seed.length >= 3) relatedReq(seed, opts()).catch(() => {});
 }
 
-async function research(seeds, opts) {
+async function research(seeds, opts, keepTab = false) {
   if (state.conn && !state.conn.checking && !connected()) { state.blocked = true; setTab("foryou"); return; }
   state.blocked = false;
   seeds = parseSeeds(seeds.join(","));
   if (!seeds.length) return;
   state.result = { seeds, opts, related: Object.fromEntries(seeds.map((s) => [s, { loading: true }])), live: true };
   state.selected = null; state.filter = "all"; state.insight = {}; state.compare = []; state.comparison = null;
-  setTab("foryou");
+  if (keepTab) render(); else setTab("foryou");
   await Promise.all(seeds.map(async (seed) => {
     const done = job(`Rising searches for “${seed}”`);
     try { state.result.related[seed] = (await relatedReq(seed, opts)).data; }
@@ -220,7 +202,7 @@ async function select(query, scroll) {
   const tasks = [];
   if (!ins.interest) tasks.push((async () => {
     const done = job(`Charting “${query}”`);
-    try { ins.interest = (await api("/api/interest", { keywords: query, ...r.opts })).data; } catch (e) { ins.interest = { error: e.message, auth: e.auth }; }
+    try { ins.interest = (await call(fc.interest([query], r.opts))).data; } catch (e) { ins.interest = { error: e.message, auth: e.auth }; }
     done(); render();
   })());
   if (connected()) fetchVideos(query);
@@ -372,7 +354,7 @@ async function runCompare() {
   setTab("foryou");
   scrollTo({ top: 0, behavior: "smooth" });
   const done = job(`Comparing ${keys.length} keywords`);
-  try { state.comparison.data = (await api("/api/interest", { keywords: keys.join("|"), ...r.opts })).data; }
+  try { state.comparison.data = (await call(fc.interest(keys, r.opts))).data; }
   catch (e) { state.comparison.data = { error: e.message, auth: e.auth }; }
   done();
   render();
@@ -430,7 +412,7 @@ async function fetchVideos(keyword) {
   if (state.videos[keyword]) return;
   state.videos[keyword] = { loading: true };
   const done = job(`Top YouTube videos for “${keyword}”`);
-  try { state.videos[keyword] = { list: (await api("/api/videos", { keyword })).data }; }
+  try { state.videos[keyword] = { list: relevant(keyword, (await call(fc.youtubeTop(keyword))).data) }; }
   catch (e) { state.videos[keyword] = { error: e.message, auth: e.auth }; }
   done();
   if (state.tab === "videos") render();
@@ -584,16 +566,19 @@ async function suggest(more) {
   const keyword = $("sugKw").value.trim();
   const tool = $("sugTool").value.trim();
   if (!keyword) return;
-  if (!connected()) { state.sug = { error: "Not connected", auth: state.conn?.rejected ? "rejected" : "missing" }; return renderSuggestions(); }
   const same = state.sugKw === keyword && state.sugTool === tool;
   state.sugKw = keyword; state.sugTool = tool;
+  if (!connected()) { state.sug = { error: "Not connected", auth: state.conn?.rejected ? "rejected" : "missing" }; return renderSuggestions(); }
   if (!more || !same) state.sugShown = [];
   const prev = state.sug;
   state.sug = { loading: true, prev: more && same ? prev : null };
   renderSuggestions();
   const done = job(`Researching top YouTube titles for “${keyword}”`);
   try {
-    state.sug = (await api("/api/titles", { keyword, tool, exclude: state.sugShown.join("\n") })).data;
+    const [top, ideas] = await Promise.all([call(fc.youtubeTop(keyword)), fc.titleIdeas(keyword, tool).catch(() => null)]);
+    // If the language model call fails, suggestions fall back to the templates in titles.js.
+    state.sug = suggestTitles(keyword, tool, top.data, (t) => scoreTitle(t, MODEL).score, state.sugShown, ideas?.data ?? null);
+    if (!state.sug.studied && !ideas) throw new Error("None of YouTube's top videos for this keyword were on topic. Try a broader keyword.");
     state.sugShown.push(...state.sug.titles.map((t) => t.title));
   } catch (e) { state.sug = { error: e.message, auth: e.auth }; }
   done();
