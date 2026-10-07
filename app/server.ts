@@ -4,7 +4,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
-import { related, interest, youtubeTop, account, type Opts } from "./lib/fireiq";
+import { related, interest, youtubeTop, titleIdeas, account, type Opts } from "./lib/fireiq";
 import { SdkError } from "firecrawl";
 import { suggestTitles, relevant } from "./lib/titles";
 
@@ -51,10 +51,14 @@ const routes: Record<string, (q: URLSearchParams, key: string, fresh: boolean) =
     const keyword = (q.get("keyword") ?? "").trim(), tool = (q.get("tool") ?? "").trim();
     const exclude = (q.get("exclude") ?? "").split("\n").filter(Boolean);
     if (!keyword) throw new Error("Add a keyword first");
-    const research = await cached({ youtubeTop: keyword.toLowerCase() }, fresh, () => youtubeTop(key, keyword));
-    const out = suggestTitles(keyword, tool, research.data, (t) => scoreTitle(t, MODEL).score, exclude);
-    if (!out.studied) throw new Error("None of YouTube's top videos for this keyword were on topic. Try a broader keyword.");
-    return { data: out, credits: research.credits, cached: research.cached };
+    const [research, ideas] = await Promise.all([
+      cached({ youtubeTop: keyword.toLowerCase() }, fresh, () => youtubeTop(key, keyword)),
+      // If the model call fails, suggestions fall back to the templates rather than failing outright.
+      cached({ titleIdeas: keyword.toLowerCase(), tool: tool.toLowerCase() }, fresh, () => titleIdeas(key, keyword, tool)).catch(() => null),
+    ]);
+    const out = suggestTitles(keyword, tool, research.data, (t) => scoreTitle(t, MODEL).score, exclude, ideas?.data ?? null);
+    if (!out.studied && !ideas) throw new Error("None of YouTube's top videos for this keyword were on topic. Try a broader keyword.");
+    return { data: out, credits: research.credits + (ideas?.credits ?? 0), cached: research.cached };
   },
 };
 

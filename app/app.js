@@ -579,10 +579,11 @@ async function suggest(more) {
 function renderSuggestions() {
   const el = $("sug"); if (!el) return;
   const s = state.sug;
-  if (!s) { el.innerHTML = `<div class="note">Scrapes the most-viewed YouTube videos for the keyword with Firecrawl, works out which title patterns earn the most views, writes new titles in those patterns (and adapts the top titles to your tool), then picks 5 strong ones. Edit them so they match your video.</div>`; return; }
+  if (!s) { el.innerHTML = `<div class="note">Reads the most-viewed YouTube videos for the keyword with Firecrawl, works out what the subject is and which title patterns earn the most views, writes 15 new titles, then shows the 5 that score highest. Edit them so they match your video.</div>`; return; }
   if (s.loading) { el.innerHTML = Array.from({ length: 5 }, () => `<div class="skel" style="height:48px;margin-top:8px"></div>`).join(""); return; }
   if (s.error) { el.innerHTML = s.auth ? connectCard(s.auth) : `<div class="err" style="margin-top:10px">${esc(s.error)}</div>`; return; }
-  el.innerHTML = `<table class="sug"><thead><tr><th>Title</th><th class="r">Score</th></tr></thead><tbody>
+  el.innerHTML = `${s.subject ? `<div class="about"><b>What this is about:</b> ${esc(s.subject)}${s.angles?.length ? `<div class="angles">${s.angles.slice(0, 5).map((a) => `<span>${esc(a)}</span>`).join("")}</div>` : ""}</div>` : ""}
+  <table class="sug"><thead><tr><th>Title</th><th class="r">Score</th></tr></thead><tbody>
     ${s.titles.map((t) => `<tr data-t="${esc(t.title)}"><td><div>${esc(t.title)}<span class="pattern">${esc(t.pattern)}</span></div>
       ${t.inspired_by ? `<div class="from">Inspired by <a href="${esc(t.inspired_url)}" target="_blank" rel="noopener">${esc(t.inspired_by)}</a>${t.inspired_views ? ` · ${fmt(t.inspired_views)} views` : ""}</div>` : `<div class="from">From title-score: one of the framings that lifts vidIQ's score most</div>`}</td>
       <td class="r"><span class="badge ${t.score >= 70 ? "b-green" : t.score >= 50 ? "b-amber" : "b-red"}">${t.score}</span></td></tr>`).join("")}

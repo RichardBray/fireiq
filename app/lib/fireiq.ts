@@ -124,3 +124,38 @@ export async function account(apiKey: string) {
   const u = await client(apiKey).getCreditUsage();
   return { remainingCredits: u.remainingCredits, planCredits: u.planCredits ?? null };
 }
+
+export type TitleIdeas = { subject: string; angles: string[]; titles: { title: string; inspired_by: string }[] };
+
+// Firecrawl's JSON format runs a language model over the page it scrapes (+4 credits). Pointed at YouTube's
+// most-viewed results for a keyword, it reads what the subject is and what gets clicks, then writes titles,
+// so suggestions understand the topic using only the viewer's Firecrawl key.
+export async function titleIdeas(apiKey: string, keyword: string, tool: string): Promise<Out<TitleIdeas>> {
+  const angle = tool ? `\n- The video's angle is ${tool}: every title must name ${tool}.` : "";
+  const prompt = `This page lists the most-viewed YouTube videos for "${keyword}". Read the titles, descriptions and view counts and work out what the subject actually is and what makes viewers click.
+
+Then write 15 NEW titles for a video about "${keyword}". Rules:${angle}
+- Be specific to this subject: use real names, features and comparisons from these videos, never filler like "game changer", "revolutionary" or "explored".
+- Use what works here: first-person framing ("I tested…", "I replaced…"), a surprising claim, a comparison, or a direct challenge to the viewer.
+- Never invent results or statistics. Only use a number if it appears on this page.
+- No emoji, at most one exclamation mark across all titles, Title Case, under 65 characters.
+- Every title takes a different angle and must not copy or lightly reword an existing title.
+For each, give the existing title whose pattern it borrows.`;
+  const r: any = await limited(() => client(apiKey).scrape(`https://www.youtube.com/results?search_query=${encodeURIComponent(keyword)}&sp=${SORTS.allTime}`, {
+    formats: [{
+      type: "json",
+      prompt,
+      schema: {
+        type: "object",
+        properties: {
+          subject: { type: "string", description: "One sentence on what the subject is" },
+          angles: { type: "array", items: { type: "string" }, description: "What viewers find interesting about it" },
+          titles: { type: "array", items: { type: "object", properties: { title: { type: "string" }, inspired_by: { type: "string" } }, required: ["title", "inspired_by"] } },
+        },
+        required: ["subject", "titles"],
+      },
+    }],
+  } as any));
+  const j = r.json ?? {};
+  return { data: { subject: j.subject ?? "", angles: j.angles ?? [], titles: (j.titles ?? []).filter((t: any) => t?.title) }, credits: r.metadata?.creditsUsed ?? 5 };
+}

@@ -4,7 +4,7 @@
 // 3. generate: fill the winning patterns in for the keyword, and adapt the top titles themselves
 // 4. rank: score every candidate with title-score, then pick 5 with different patterns. Picks are
 //    sampled from the strongest candidates, so "Suggest 5 more" gives new titles, not the same 5.
-import type { TopVideo } from "./fireiq";
+import type { TopVideo, TitleIdeas } from "./fireiq";
 
 export type Suggestion = { title: string; pattern: string; score: number; inspired_by: string; inspired_url: string | null; inspired_views: number | null };
 export type Pattern = { name: string; share: number; videos: number };
@@ -169,7 +169,7 @@ function adapt(v: TopVideo, keyword: string, K: string, base: string | null, C: 
   return t.replace(new RegExp(escRe(keyword), "i"), K);
 }
 
-export function suggestTitles(keyword: string, tool: string, videos: TopVideo[], score: (t: string) => number, exclude: string[] = [], year = new Date().getFullYear()) {
+export function suggestTitles(keyword: string, tool: string, videos: TopVideo[], score: (t: string) => number, exclude: string[] = [], ideas: TitleIdeas | null = null, year = new Date().getFullYear()) {
   const real = relevant(keyword, videos);
   const pats = patterns(real);
   const share = new Map(pats.map((p) => [p.name, p.share]));
@@ -185,7 +185,7 @@ export function suggestTitles(keyword: string, tool: string, videos: TopVideo[],
     title = title.replace(/\s+/g, " ").trim();
     const l = title.toLowerCase();
     if (title.length > 80 || pool.some((s) => s.title.toLowerCase() === l) || real.some((v) => v.title.toLowerCase() === l)) return;
-    pool.push({ title, pattern, score: score(title), inspired_by: src?.title ?? "", inspired_url: src?.url ?? null, inspired_views: src?.views ?? null });
+    pool.push({ title, pattern, score: score(title), inspired_by: src?.title ?? "", inspired_url: src?.url || null, inspired_views: src?.views || null });
   };
   const vs = keyword.trim().match(/^(.+?)\s+(?:vs\.?|versus|or)\s+(.+)$/i);
   const task = keyword.trim().match(/^how (?:to|do i|can i)\s+(.+)$/i);
@@ -194,13 +194,23 @@ export function suggestTitles(keyword: string, tool: string, videos: TopVideo[],
     : task ? taskTemplates(task[1], T, year)
     : !alt && words >= 4 ? topicTemplates(K, T, year)
     : templates(K, base, C, T, year);
-  for (const [p, list] of set) {
-    if (!share.has(p) && !LEVERS.has(p)) continue;
-    for (const t of list) if (t) add(t, p, top(p));
+  // Titles written by the language model come first; the templates only fill in when it returned too few.
+  const patternOf = (t: string) => Object.keys(DETECTORS).find((p) => !["Year", "Brackets"].includes(p) && DETECTORS[p].test(t)) ?? "Fresh angle";
+  const findVideo = (title: string) => { const l = title.toLowerCase().slice(0, 40); return real.find((v) => v.title.toLowerCase().startsWith(l)) ?? videos.find((v) => v.title.toLowerCase().startsWith(l)); };
+  for (const i of ideas?.titles ?? []) {
+    const src = findVideo(i.inspired_by);
+    add(i.title.replace(/!+/g, "!"), patternOf(i.title), src ?? ({ title: i.inspired_by, url: "", views: 0 } as TopVideo));
   }
-  for (const v of real.slice(0, 15)) {
-    const t = adapt(v, keyword, K, base, C, T, year);
-    if (t) add(t, "Adapted top video", v);
+  const fromIdeas = pool.length;
+  if (fromIdeas < 8) {
+    for (const [p, list] of set) {
+      if (!share.has(p) && !LEVERS.has(p)) continue;
+      for (const t of list) if (t) add(t, p, top(p));
+    }
+    for (const v of real.slice(0, 15)) {
+      const t = adapt(v, keyword, K, base, C, T, year);
+      if (t) add(t, "Adapted top video", v);
+    }
   }
 
   // Weight each candidate by its score and by the share of the field's views its pattern earns.
@@ -216,5 +226,6 @@ export function suggestTitles(keyword: string, tool: string, videos: TopVideo[],
     picked.push(s);
     candidates.splice(candidates.indexOf(s), 1);
   }
-  return { titles: picked.sort((a, b) => b.score - a.score), patterns: pats.slice(0, 6), top: real.slice(0, 8), studied: real.length, poolSize: pool.length };
+  return { titles: picked.sort((a, b) => b.score - a.score), patterns: pats.slice(0, 6), top: real.slice(0, 8), studied: real.length, poolSize: pool.length,
+    source: fromIdeas >= 5 ? "ideas" : "templates", subject: ideas?.subject ?? "", angles: ideas?.angles ?? [] };
 }
