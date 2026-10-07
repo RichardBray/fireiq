@@ -104,6 +104,11 @@ td { padding: 13px 16px; border-bottom: 1px solid var(--line); white-space: nowr
 .sug .from { color: var(--dim); font-size: 13px; margin-top: 3px; }
 .sug .from a { color: var(--muted); text-decoration: underline; text-decoration-color: var(--line); }
 .pattern { display: inline-block; font-size: 12px; color: var(--muted); border: 1px solid var(--line); border-radius: 6px; padding: 1px 7px; margin-left: 8px; vertical-align: 1px; }
+.site-foot { max-width: 1320px; margin: 0 auto; padding: 24px 36px 40px; border-top: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; color: var(--dim); font-size: 13.5px; }
+.site-foot a { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); }
+.site-foot a:hover { color: var(--text); }
+.site-foot a b { color: var(--text); font-weight: 700; }
+.site-foot img { height: 18px; }
 @media (max-width: 900px) { .kwt th:nth-child(1) { width: 52%; } .kwt th:nth-child(3) { width: 20%; } .kwt th:nth-child(4) { width: 28%; } }
 th.r, td.r { text-align: right; } th.c, td.c { text-align: center; }
 tbody tr { cursor: pointer; transition: background .1s; }
@@ -163,6 +168,7 @@ td .sub { color: var(--dim); font-size: 13px; margin-left: 8px; }
 
 @media (max-width: 900px) {
   .research { grid-template-columns: minmax(0, 1fr); }
+  .site-foot { padding: 20px 16px 32px; }
   .main { padding: 20px 16px 48px; }
   .topnav .in { padding: 0 12px; gap: 10px; } .brand span:not(.logo) { display: none; } .brand { font-size: 0; }
   .topnav .tab { padding: 8px 9px; font-size: 14px; } .account .ghost-key, .who .k, .account .long { display: none; }
@@ -200,6 +206,11 @@ td .sub { color: var(--dim); font-size: 13px; margin-left: 8px; }
     <div id="view" style="margin-top:8px;scroll-margin-top:80px"></div>
   </main>
 </div>
+
+<footer class="site-foot">
+  <a href="https://www.firecrawl.dev/alexandria" target="_blank" rel="noopener"><img src="firecrawl-logo.svg" alt=""><span>Built with <b>Firecrawl Alexandria</b></span></a>
+  <span>Search trends and YouTube data from Firecrawl</span>
+</footer>
 
 <script src="model.js"></script>
 <script src="score.js"></script>
