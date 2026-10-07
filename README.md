@@ -10,6 +10,10 @@ YouTube research skills for coding agents, built on [Firecrawl](https://firecraw
 
 Planned: `title-research` (top-performing titles for a topic), `title-score` (offline title scoring), `description` (description, tags and chapters from a transcript), `outliers` (videos far above their channel's usual views).
 
+## App
+
+[`app/`](app) is a vidIQ-style web app on the same data: rising YouTube searches, interest-over-time charts, a live title scorer and title suggestions from the most-viewed videos for a keyword. It runs on your own Firecrawl account: `cd app && bun install && bun server.ts`. See [app/README.md](app/README.md).
+
 ## Install
 
 Needs the [Firecrawl CLI](https://docs.firecrawl.dev/sdks/cli), signed in with `firecrawl login`, and Python 3.

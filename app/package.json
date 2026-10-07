@@ -1,0 +1,13 @@
+{
+  "name": "fireiq-app",
+  "private": true,
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^7"
+  },
+  "dependencies": {
+    "firecrawl": "4.44.1"
+  }
+}
