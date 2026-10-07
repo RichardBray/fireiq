@@ -23,6 +23,7 @@ Open http://localhost:4321 and press **Sign in with Firecrawl**, or **Add API ke
 | Research a topic (rising and breakout keywords) | 5 per topic |
 | Click a keyword (interest-over-time chart) | 5 |
 | Suggest titles for a keyword | 2 |
+| A keyword's top videos (fetched when you click the keyword, shared with title suggestions) | 2 |
 
 Responses are cached in `data/cache/`, so repeating something costs nothing.
 

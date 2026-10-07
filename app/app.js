@@ -209,6 +209,7 @@ async function select(query, scroll) {
     try { ins.interest = (await api("/api/interest", { keywords: query, ...r.opts })).data; } catch (e) { ins.interest = { error: e.message, auth: e.auth }; }
     done(); render();
   })());
+  if (connected()) fetchVideos(query);
   await Promise.all(tasks);
 }
 
@@ -411,15 +412,18 @@ function renderKeywords(v) {
 
 // Videos: YouTube's most-viewed results for a keyword. The outlier multiple compares each video with the
 // median of these results (vidIQ compares with the channel's own average, which needs channel data).
-async function loadVideos(keyword) {
-  state.videoKw = keyword;
-  if (state.videos[keyword]) return render();
+async function fetchVideos(keyword) {
+  if (state.videos[keyword]) return;
   state.videos[keyword] = { loading: true };
-  render();
   const done = job(`Top YouTube videos for “${keyword}”`);
   try { state.videos[keyword] = { list: (await api("/api/videos", { keyword })).data }; }
   catch (e) { state.videos[keyword] = { error: e.message, auth: e.auth }; }
   done();
+  if (state.tab === "videos") render();
+}
+function loadVideos(keyword) {
+  state.videoKw = keyword;
+  fetchVideos(keyword);
   render();
 }
 const ytId = (url) => new URL(url).searchParams.get("v");
@@ -433,7 +437,7 @@ function videoCard(v, mult) {
 function renderVideos(v) {
   const r = state.result;
   const kw = state.videoKw || state.selected || r.seeds[0];
-  if (!state.videos[kw] && connected()) { loadVideos(kw); return; }
+  if (!state.videos[kw] && connected()) fetchVideos(kw);
   const d = state.videos[kw] || (connected() ? { loading: true } : { error: "Not connected", auth: "missing" });
   const opts = [...new Set([...r.seeds, ...(state.selected ? [state.selected] : []), kw])];
   const pick = `<div class="chips">${opts.map((k) => `<button class="chip ${k === kw ? "on" : ""}" data-vk="${esc(k)}">${esc(k)}</button>`).join("")}</div>`;
