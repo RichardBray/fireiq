@@ -29,6 +29,7 @@ const state = {
   comparison: null,
   videos: {},
   videoKw: null,
+  vidMode: "hot",
   jobs: { total: 0, done: 0, label: "" },
   lab: store.get("fireiq.labTitle", ""),
 };

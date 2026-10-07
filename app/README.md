@@ -3,7 +3,7 @@
 A small YouTube research app in the style of vidIQ, running on your own Firecrawl account.
 
 - **Overview / Keywords:** rising, breakout and most-searched YouTube keywords for your topics from Firecrawl Trends. Click a keyword for a 0–100 interest-over-time chart; tick up to 5 to compare them.
-- **Videos:** the most-viewed YouTube videos for a keyword, with outlier badges and thumbnails. **Hot right now** ranks them by views per day instead, so recent videos that are taking off stand out.
+- **Videos:** YouTube's top videos for a keyword with outlier badges and thumbnails. **Hot right now** (the default) ranks them by views per day, so recent videos that are taking off stand out; **Most viewed** ranks by total views.
 - **Title Lab:** scores a title as you type, suggests titles from the most-viewed videos for a keyword, and keeps the ones you star.
 
 ## How it's built
