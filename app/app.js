@@ -180,17 +180,31 @@ function allKw() {
 const topKw = () => allKw().filter((c) => c.top != null).sort((a, b) => b.top - a.top);
 const cand = (q) => allKw().find((c) => c.query === q) || { query: q, seeds: [] };
 
+// Speculative search: requests start while the user pauses typing or heads for the Research button,
+// and research() reuses the in-flight promise, so pressing Research usually finds the data ready.
+const related = new Map();
+function relatedReq(seed, o) {
+  const key = JSON.stringify([seed, o]);
+  if (!related.has(key)) related.set(key, api("/api/related", { keyword: seed, ...o }).catch((e) => { related.delete(key); throw e; }));
+  return related.get(key);
+}
+const parseSeeds = (text) => [...new Set(text.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean))].slice(0, 6);
+function prefetch() {
+  if (!connected()) return;
+  for (const seed of parseSeeds($("q").value)) if (seed.length >= 3) relatedReq(seed, opts()).catch(() => {});
+}
+
 async function research(seeds, opts) {
   if (state.conn && !state.conn.checking && !connected()) { state.blocked = true; setTab("foryou"); return; }
   state.blocked = false;
-  seeds = [...new Set(seeds.map((s) => s.trim().toLowerCase()).filter(Boolean))].slice(0, 6);
+  seeds = parseSeeds(seeds.join(","));
   if (!seeds.length) return;
   state.result = { seeds, opts, related: Object.fromEntries(seeds.map((s) => [s, { loading: true }])), live: true };
   state.selected = null; state.filter = "all"; state.insight = {}; state.compare = []; state.comparison = null;
   setTab("foryou");
   await Promise.all(seeds.map(async (seed) => {
     const done = job(`Rising searches for “${seed}”`);
-    try { state.result.related[seed] = (await api("/api/related", { keyword: seed, ...opts })).data; }
+    try { state.result.related[seed] = (await relatedReq(seed, opts)).data; }
     catch (e) { state.result.related[seed] = { error: e.message, auth: e.auth }; }
     done(); render();
   }));
@@ -595,6 +609,12 @@ function renderStatus() {
 // ---------- wiring ----------
 const opts = () => ({ geo: $("geo").value, time: $("time").value, property: $("property").value });
 $("searchForm").onsubmit = (e) => { e.preventDefault(); research($("q").value.split(","), opts()); };
+let typingTimer;
+$("q").addEventListener("input", () => { clearTimeout(typingTimer); typingTimer = setTimeout(prefetch, 800); });
+const goBtn = $("searchForm").querySelector('button[type="submit"]');
+goBtn.addEventListener("pointerenter", prefetch);
+goBtn.addEventListener("focus", prefetch);
+for (const id of ["time", "geo", "property"]) $(id).addEventListener("change", prefetch);
 document.querySelectorAll("[data-tab]").forEach((b) => (b.onclick = () => setTab(b.dataset.tab)));
 
 // Opens on "claude code": live when connected (cached after the first load), otherwise the saved run.
