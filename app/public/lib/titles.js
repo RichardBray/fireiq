@@ -160,7 +160,7 @@ function adapt(v, keyword, K, base, C, T, Y) {
     return null;
   return t.replace(new RegExp(escRe(keyword), "i"), K);
 }
-export function suggestTitles(keyword, tool, videos, score, exclude = [], ideas = null, year = new Date().getFullYear()) {
+export function suggestTitles(keyword, tool, videos, score, exclude = [], ideas = null, trending = [], year = new Date().getFullYear()) {
   const real = relevant(keyword, videos);
   const pats = patterns(real);
   const share = new Map(pats.map((p) => [p.name, p.share]));
@@ -170,13 +170,28 @@ export function suggestTitles(keyword, tool, videos, score, exclude = [], ideas 
   const C = competitors(alt ? alt[1] : keyword, real)[0] ?? null;
   const T = tool.trim() || null;
   const top = (p) => real.filter((v) => DETECTORS[p]?.test(v.title)).sort((a, b) => b.views - a.views)[0];
+  // A title that contains a phrase people are searching for right now ranks higher. This is kept apart from
+  // title-score, which approximates vidIQ's own number and stays unchanged.
+  const BONUS = { Breakout: 4, Rising: 3, "Most searched": 2 };
+  // Filler words don't count, so "I Tried Claude Code For Free" matches "how to get claude code for free".
+  const FILLER = new Set(["how", "to", "get", "the", "a", "an", "for", "is", "does", "do", "what", "why", "with", "and", "of", "in", "on", "use", "using", "vs", "my", "your"]);
+  const wordSet = (t) => new Set((t.toLowerCase().match(/[a-z0-9.+#]+/g) ?? []).filter((w) => !FILLER.has(w)));
+  const kw = keyword.toLowerCase().trim();
+  const searchMatch = (title) => {
+    const have = wordSet(title);
+    // A trending phrase must add something beyond the keyword itself to count as a match.
+    const extra = (q) => [...wordSet(q)].some((w) => !wordSet(kw).has(w));
+    const hit = trending.find((t) => t.query.toLowerCase() !== kw && extra(t.query) && [...wordSet(t.query)].every((w) => have.has(w)));
+    return hit ? { query: hit.query, label: hit.label, bonus: BONUS[hit.label] ?? 2 } : null;
+  };
+  const rank = (s) => s.score + (s.match?.bonus ?? 0);
   const pool = [];
   const add = (title, pattern, src) => {
     title = title.replace(/\s+/g, " ").trim();
     const l = title.toLowerCase();
     if (title.length > 80 || pool.some((s) => s.title.toLowerCase() === l) || real.some((v) => v.title.toLowerCase() === l))
       return;
-    pool.push({ title, pattern, score: score(title), inspired_by: src?.title ?? "", inspired_url: src?.url || null, inspired_views: src?.views || null });
+    pool.push({ title, pattern, score: score(title), match: searchMatch(title), inspired_by: src?.title ?? "", inspired_url: src?.url || null, inspired_views: src?.views || null });
   };
   const vs = keyword.trim().match(/^(.+?)\s+(?:vs\.?|versus|or)\s+(.+)$/i);
   const task = keyword.trim().match(/^how (?:to|do i|can i)\s+(.+)$/i);
@@ -208,9 +223,9 @@ export function suggestTitles(keyword, tool, videos, score, exclude = [], ideas 
     }
   }
   // Weight each candidate by its score and by the share of the field's views its pattern earns.
-  const weight = (s) => Math.exp((s.score - 80) / 5) * (1 + 3 * (share.get(s.pattern) ?? (s.pattern === "Adapted top video" ? 0.5 : 0.1)));
+  const weight = (s) => Math.exp((rank(s) - 80) / 5) * (1 + 3 * (share.get(s.pattern) ?? (s.pattern === "Adapted top video" ? 0.5 : 0.1)));
   const unseen = pool.filter((s) => !exclude.some((e) => e.toLowerCase() === s.title.toLowerCase()));
-  const candidates = (unseen.length >= 5 ? unseen : pool).sort((a, b) => b.score - a.score).slice(0, 18);
+  const candidates = (unseen.length >= 5 ? unseen : pool).sort((a, b) => rank(b) - rank(a)).slice(0, 18);
   const picked = [];
   while (picked.length < 5 && candidates.length) {
     const avail = candidates.filter((s) => !picked.some((p) => p.pattern === s.pattern));
@@ -220,6 +235,6 @@ export function suggestTitles(keyword, tool, videos, score, exclude = [], ideas 
     picked.push(s);
     candidates.splice(candidates.indexOf(s), 1);
   }
-  return { titles: picked.sort((a, b) => b.score - a.score), patterns: pats.slice(0, 6), top: real.slice(0, 8), studied: real.length, poolSize: pool.length,
+  return { titles: picked.sort((a, b) => rank(b) - rank(a)), trending, patterns: pats.slice(0, 6), top: real.slice(0, 8), studied: real.length, poolSize: pool.length,
     source: fromIdeas >= 5 ? "ideas" : "templates", subject: ideas?.subject ?? "", angles: ideas?.angles ?? [] };
 }

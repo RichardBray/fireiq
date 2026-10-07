@@ -562,6 +562,12 @@ function renderLab(v) {
 }
 
 // "more" asks for 5 titles that haven't been shown yet for this keyword and tool.
+function trendingFrom(d, keyword) {
+  const kw = keyword.toLowerCase();
+  const rising = (d?.rising ?? []).filter((q) => q.query.toLowerCase() !== kw).slice(0, 8).map((q) => ({ query: q.query, label: q.breakout ? "Breakout" : "Rising" }));
+  const top = (d?.top ?? []).filter((q) => q.query.toLowerCase() !== kw && !rising.some((r) => r.query === q.query)).slice(0, 4).map((q) => ({ query: q.query, label: "Most searched" }));
+  return [...rising, ...top];
+}
 async function suggest(more) {
   const keyword = $("sugKw").value.trim();
   const tool = $("sugTool").value.trim();
@@ -575,9 +581,13 @@ async function suggest(more) {
   renderSuggestions();
   const done = job(`Researching top YouTube titles for “${keyword}”`);
   try {
-    const [top, ideas] = await Promise.all([call(fc.youtubeTop(keyword)), fc.titleIdeas(keyword, tool).catch(() => null)]);
-    // If the language model call fails, suggestions fall back to the templates in titles.js.
-    state.sug = suggestTitles(keyword, tool, top.data, (t) => scoreTitle(t, MODEL).score, state.sugShown, ideas?.data ?? null);
+    // Trending searches for the keyword (free if it was already researched on Overview) guide the writer
+    // and give matching titles a ranking bonus. If Trends or the language model fails, carry on without.
+    const o = state.result?.opts ?? opts();
+    const trendingP = fc.related(keyword, o).then((r) => trendingFrom(r.data, keyword)).catch(() => []);
+    const [top, trending] = await Promise.all([call(fc.youtubeTop(keyword)), trendingP]);
+    const ideas = await fc.titleIdeas(keyword, tool, trending).catch(() => null);
+    state.sug = suggestTitles(keyword, tool, top.data, (t) => scoreTitle(t, MODEL).score, state.sugShown, ideas?.data ?? null, trending);
     if (!state.sug.studied && !ideas) throw new Error("None of YouTube's top videos for this keyword were on topic. Try a broader keyword.");
     state.sugShown.push(...state.sug.titles.map((t) => t.title));
   } catch (e) { state.sug = { error: e.message, auth: e.auth }; }
@@ -592,7 +602,7 @@ function renderSuggestions() {
   if (s.error) { el.innerHTML = s.auth ? connectCard(s.auth) : `<div class="err" style="margin-top:10px">${esc(s.error)}</div>`; return; }
   el.innerHTML = `${s.subject ? `<div class="about"><b>What this is about:</b> ${esc(s.subject)}${s.angles?.length ? `<div class="angles">${s.angles.slice(0, 5).map((a) => `<span>${esc(a)}</span>`).join("")}</div>` : ""}</div>` : ""}
   <table class="sug"><thead><tr><th style="width:44px"></th><th>Title</th><th class="r">Score</th></tr></thead><tbody>
-    ${s.titles.map((t) => `<tr data-t="${esc(t.title)}"><td class="star-cell"><button class="icon-btn star" data-star="${esc(t.title)}" title="Save">${STAR(isSaved(t.title))}</button></td><td><div>${esc(t.title)}<span class="pattern">${esc(t.pattern)}</span></div>
+    ${s.titles.map((t) => `<tr data-t="${esc(t.title)}"><td class="star-cell"><button class="icon-btn star" data-star="${esc(t.title)}" title="Save">${STAR(isSaved(t.title))}</button></td><td><div>${esc(t.title)}<span class="pattern">${esc(t.pattern)}</span>${t.match ? `<span class="pattern match" title="Contains a phrase people are searching for now">🔍 ${esc(t.match.query)} · ${esc(t.match.label)}</span>` : ""}</div>
       ${t.inspired_by ? `<div class="from">Inspired by <a href="${esc(t.inspired_url)}" target="_blank" rel="noopener">${esc(t.inspired_by)}</a>${t.inspired_views ? ` · ${fmt(t.inspired_views)} views` : ""}</div>` : `<div class="from">From title-score: one of the framings that lifts vidIQ's score most</div>`}</td>
       <td class="r"><span class="badge ${t.score >= 70 ? "b-green" : t.score >= 50 ? "b-amber" : "b-red"}">${t.score}</span></td></tr>`).join("")}
   </tbody></table>
@@ -602,6 +612,8 @@ function renderSuggestions() {
       <h4>What's working for “${esc(state.sugKw)}”</h4>
       <div class="pats">${s.patterns.map((p) => `<div class="pat"><span>${esc(p.name)}</span><div class="pbar"><i style="width:${Math.round(p.share * 100)}%"></i></div><b>${Math.round(p.share * 100)}%</b></div>`).join("")}</div>
       <div class="note">Share of views among the ${s.studied} top videos studied. A title can use several patterns.</div>
+      ${s.trending?.length ? `<h4 style="margin-top:18px">Searching now</h4><div class="angles">${s.trending.map((t) => `<span>${esc(t.query)} · ${esc(t.label)}</span>`).join("")}</div>
+      <div class="note">Rising and most-searched YouTube searches for this keyword. Titles that contain one rank higher.</div>` : ""}
     </div>
     <div>
       <h4>Most-viewed videos</h4>

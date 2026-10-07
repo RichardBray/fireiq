@@ -154,12 +154,16 @@ export function parseResults(md) {
 
 // Firecrawl's JSON format runs a language model over the page it scrapes (+4 credits). Pointed at YouTube's
 // most-viewed results for a keyword, it reads what the subject is and what gets clicks, then writes titles.
-export function titleIdeas(keyword, tool, fresh) {
-  return cached({ titleIdeas: keyword.toLowerCase(), tool: tool.toLowerCase() }, fresh, async () => {
+// `trending` is what people search alongside the keyword right now (from Trends), offered as phrases
+// the titles can use where they fit.
+export function titleIdeas(keyword, tool, trending = [], fresh) {
+  const phrases = trending.map((t) => t.query);
+  return cached({ titleIdeas: keyword.toLowerCase(), tool: tool.toLowerCase(), phrases }, fresh, async () => {
     const angle = tool ? `\n- The video's angle is ${tool}: every title must name ${tool}.` : "";
+    const searching = phrases.length ? `\n- People are searching YouTube for these right now: ${trending.map((t) => `"${t.query}" (${t.label})`).join(", ")}. Work one of these into at least 4 of the titles, only where it reads naturally; never more than one per title.` : "";
     const prompt = `This page lists the most-viewed YouTube videos for "${keyword}". Read the titles, descriptions and view counts and work out what the subject actually is and what makes viewers click.
 
-Then write 15 NEW titles for a video about "${keyword}". Rules:${angle}
+Then write 15 NEW titles for a video about "${keyword}". Rules:${angle}${searching}
 - Be specific to this subject: use real names, features and comparisons from these videos, never filler like "game changer", "revolutionary" or "explored".
 - Use what works here: first-person framing ("I tested…", "I replaced…"), a surprising claim, a comparison, or a direct challenge to the viewer.
 - Never invent results or statistics. Only use a number if it appears on this page.

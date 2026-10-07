@@ -36,13 +36,14 @@ bunx wrangler deploy
 | Research a topic (rising, breakout and most-searched keywords) | 5 per topic |
 | Click a keyword (chart) or compare keywords | 5 |
 | A keyword's top videos (fetched when you click the keyword) | 2 |
-| Suggest titles (top videos + Firecrawl's language model) | 7, or 5 if the videos are cached; "Suggest 5 more" is free |
+| Suggest titles (top videos + trending searches + Firecrawl's language model) | up to 12, less for keywords you've already researched; "Suggest 5 more" is free |
 
 ## How title suggestions work
 
 1. Scrape YouTube's results for the keyword sorted by views (all time and this year) and work out which title patterns earn the most views.
-2. Scrape the same page with Firecrawl's JSON format, which runs a language model over it (+4 credits). It reads what the subject is and what viewers click on, then writes 15 new titles, each naming the existing title whose pattern it borrows. It's told not to invent statistics, and to name your tool in every title if you give one.
-3. Score all 15 with the title-score model and show the 5 strongest with different patterns. **Suggest 5 more** shows the next 5 without another call.
+2. Get the rising, breakout and most-searched YouTube searches for the keyword from Trends (free if you already researched it on Overview).
+3. Scrape the same YouTube page with Firecrawl's JSON format, which runs a language model over it (+4 credits). It reads what the subject is and what viewers click on, then writes 15 new titles, working the trending searches in where they fit, each naming the existing title whose pattern it borrows. It's told not to invent statistics, and to name your tool in every title if you give one.
+4. Score all 15 with the title-score model. Titles that contain a phrase people are searching for now get a ranking bonus and a 🔍 tag; the title score itself is unchanged. Show the 5 strongest with different patterns. **Suggest 5 more** shows the next 5 without another call.
 
 If the language model call fails, `public/lib/titles.js` falls back to templates. Edit suggestions to match your video.
 
