@@ -519,7 +519,6 @@ function renderLab(v) {
       <div class="panel">
         <form class="suggest" id="sugForm">
           <input id="sugKw" placeholder="Keyword, e.g. vidiq alternative" value="${esc(state.sugKw ?? state.selected ?? "")}">
-          <input id="sugTool" placeholder="Your tool or product (optional), e.g. Claude Code" value="${esc(state.sugTool ?? "")}">
           <button class="btn" type="submit">Suggest 5 titles</button>
         </form>
         <div id="sug" style="margin-top:6px"></div>
@@ -561,7 +560,7 @@ function renderLab(v) {
   input.focus();
 }
 
-// "more" asks for 5 titles that haven't been shown yet for this keyword and tool.
+// "more" asks for 5 titles that haven't been shown yet for this keyword.
 function trendingFrom(d, keyword) {
   const kw = keyword.toLowerCase();
   const rising = (d?.rising ?? []).filter((q) => q.query.toLowerCase() !== kw).slice(0, 8).map((q) => ({ query: q.query, label: q.breakout ? "Breakout" : "Rising" }));
@@ -570,10 +569,10 @@ function trendingFrom(d, keyword) {
 }
 async function suggest(more) {
   const keyword = $("sugKw").value.trim();
-  const tool = $("sugTool").value.trim();
+  const tool = "";
   if (!keyword) return;
-  const same = state.sugKw === keyword && state.sugTool === tool;
-  state.sugKw = keyword; state.sugTool = tool;
+  const same = state.sugKw === keyword;
+  state.sugKw = keyword;
   if (!connected()) { state.sug = { error: "Not connected", auth: state.conn?.rejected ? "rejected" : "missing" }; return renderSuggestions(); }
   if (!more || !same) state.sugShown = [];
   const prev = state.sug;
