@@ -128,7 +128,7 @@ app.post("/api/firecrawl/scrape", async (c) => {
 // ---------- feedback ----------
 // The About page's form goes to Firecrawl's Alexandria feedback, sent as the viewer's team. The body is
 // built here from a few checked fields, so the page can't send anything else under the viewer's key.
-const FEATURES = new Set(["Chrome extension", "Channel audits", "Competitor tracking", "Keyword alerts", "More vidIQ-style features"]);
+const FEATURES = new Set(["Chrome extension", "Channel audits", "Competitor tracking", "Keyword alerts", "MCP server", "More vidIQ-style features"]);
 const text = (v: unknown, max: number) => (typeof v === "string" ? v.trim().slice(0, max) : "");
 app.post("/api/feedback", async (c) => {
   const s = await session(c);
