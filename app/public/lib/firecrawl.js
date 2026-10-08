@@ -152,13 +152,30 @@ export function parseResults(md) {
   return out;
 }
 
-// Firecrawl's JSON format runs a language model over the page it scrapes (+4 credits). Pointed at YouTube's
-// most-viewed results for a keyword, it reads what the subject is and what gets clicks, then writes titles.
-// `trending` is what people search alongside the keyword right now (from Trends), offered as phrases
-// the titles can use where they fit.
-export function titleIdeas(keyword, tool, trending = [], fresh) {
+// GLM writes titles from the top videos the app already has, through the Worker (/api/llm/titles, free
+// in Firecrawl credits). Any failure there, such as no GLM key or no balance, returns null.
+async function glmIdeas(keyword, tool, trending, videos) {
+  try {
+    const res = await fetch("/api/llm/titles", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ keyword, tool, trending, videos: videos.slice(0, 30).map(({ title, views, age, channel }) => ({ title, views, age, channel })) }),
+    });
+    if (!res.ok) return null;
+    const j = await res.json();
+    return j.titles?.length ? { data: { subject: j.subject ?? "", angles: j.angles ?? [], titles: j.titles, model: j.model }, credits: 0 } : null;
+  } catch { return null; }
+}
+
+// Without GLM, Firecrawl's JSON format runs a language model over the page it scrapes (+4 credits). Pointed
+// at YouTube's most-viewed results for a keyword, it reads what the subject is and what gets clicks, then
+// writes titles. `trending` is what people search alongside the keyword right now (from Trends), offered as
+// phrases the titles can use where they fit.
+export function titleIdeas(keyword, tool, trending = [], videos = [], fresh) {
   const phrases = trending.map((t) => t.query);
   return cached({ titleIdeas: keyword.toLowerCase(), tool: tool.toLowerCase(), phrases }, fresh, async () => {
+    const glm = videos.length ? await glmIdeas(keyword, tool, trending, videos) : null;
+    if (glm) return glm;
     const angle = tool ? `\n- The video's angle is ${tool}: every title must name ${tool}.` : "";
     const searching = phrases.length ? `\n- People are searching YouTube for these right now: ${trending.map((t) => `"${t.query}" (${t.label})`).join(", ")}. Work one of these into at least 4 of the titles, only where it reads naturally; never more than one per title.` : "";
     const prompt = `This page lists the most-viewed YouTube videos for "${keyword}". Read the titles, descriptions and view counts and work out what the subject actually is and what makes viewers click.
@@ -188,7 +205,7 @@ For each, give the existing title whose pattern it borrows.`;
     });
     const out = j.data?.json ?? {};
     return {
-      data: { subject: out.subject ?? "", angles: out.angles ?? [], titles: (out.titles ?? []).filter((t) => t?.title) },
+      data: { subject: out.subject ?? "", angles: out.angles ?? [], titles: (out.titles ?? []).filter((t) => t?.title), model: "firecrawl" },
       credits: j.data?.metadata?.creditsUsed ?? 5,
     };
   });

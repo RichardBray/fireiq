@@ -3,7 +3,7 @@
 import { Hono } from "hono";
 import { getCookie, setCookie, deleteCookie } from "hono/cookie";
 
-type Env = { COOKIE_SECRET: string; ASSETS: Fetcher };
+type Env = { COOKIE_SECRET: string; ASSETS: Fetcher; GLM_API_KEY?: string; GLM_BASE_URL?: string; GLM_MODEL?: string };
 const app = new Hono<{ Bindings: Env }>();
 
 const FIRECRAWL = "https://api.firecrawl.dev/v2";
@@ -160,6 +160,73 @@ app.post("/api/feedback", async (c) => {
   if (r.status === 401) return c.json({ error: "Firecrawl rejected this API key.", auth: "rejected" }, 401);
   if (!r.ok || j.success === false) return c.json({ error: j.error || `Firecrawl error ${r.status}`, code: j.feedbackErrorCode }, r.status === 500 ? 502 : 400);
   return c.json({ ok: true });
+});
+
+// ---------- title writer (GLM) ----------
+// Title Lab tries GLM first with the owner's key (GLM_API_KEY). Any failure, including no key or no
+// balance, returns 503 and the page falls back to Firecrawl's JSON format. The prompt is built here from
+// checked fields, so signed-in viewers can't use the key for anything else.
+let glmDownUntil = 0;
+app.post("/api/llm/titles", async (c) => {
+  const key = c.env.GLM_API_KEY;
+  if (!key || Date.now() < glmDownUntil) return c.json({ error: "GLM unavailable", fallback: true }, 503);
+  if (!(await session(c))) return c.json({ error: "Connect Firecrawl to write titles.", auth: "missing" }, 401);
+  const b: any = await c.req.json().catch(() => ({}));
+  const keyword = text(b.keyword, 100);
+  const tool = text(b.tool, 60);
+  const trending = (Array.isArray(b.trending) ? b.trending : []).slice(0, 12).map((t: any) => `"${text(t?.query, 80)}" (${text(t?.label, 20)})`);
+  const videos = (Array.isArray(b.videos) ? b.videos : []).slice(0, 30)
+    .map((v: any) => `- ${text(v?.title, 150)} · ${Number(v?.views) || 0} views · ${text(v?.age, 20)} · ${text(v?.channel, 60)}`);
+  if (!keyword || !videos.length) return c.json({ error: "Nothing to write titles from." }, 400);
+  const angle = tool ? `\n- The video's angle is ${tool}: every title must name ${tool}.` : "";
+  const searching = trending.length ? `\n- People are searching YouTube for these right now: ${trending.join(", ")}. Work one of these into at least 4 of the titles, only where it reads naturally; never more than one per title.` : "";
+  const prompt = `These are the most-viewed YouTube videos for "${keyword}":
+${videos.join("\n")}
+
+Work out what the subject actually is and what makes viewers click. Then write 15 NEW titles for a video about "${keyword}". Rules:${angle}${searching}
+- Be specific to this subject: use real names, features and comparisons from these videos, never filler like "game changer", "revolutionary" or "explored".
+- Use what works here: first-person framing ("I tested…", "I replaced…"), a surprising claim, a comparison, or a direct challenge to the viewer.
+- Never invent results or statistics. Only use a number if it appears in the list above.
+- No emoji, at most one exclamation mark across all titles, Title Case, under 65 characters.
+- Every title takes a different angle and must not copy or lightly reword an existing title.
+For each, give the existing title whose pattern it borrows.
+
+Reply with JSON only: {"subject": "one sentence on what the subject is", "angles": ["what viewers find interesting", ...], "titles": [{"title": "...", "inspired_by": "..."}, ...]}`;
+  try {
+    const r = await fetch(`${c.env.GLM_BASE_URL || "https://api.z.ai/api/paas/v4"}/chat/completions`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        model: c.env.GLM_MODEL || "glm-5.3-flash",
+        messages: [{ role: "user", content: prompt }],
+        response_format: { type: "json_object" },
+        temperature: 0.9,
+      }),
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (!r.ok) {
+      // A bad key or an empty balance won't fix itself between requests, so skip GLM for a while.
+      if ([401, 402, 403, 429].includes(r.status)) glmDownUntil = Date.now() + 10 * 60_000;
+      console.log("GLM error", r.status, (await r.text()).slice(0, 300));
+      return c.json({ error: `GLM error ${r.status}`, fallback: true }, 503);
+    }
+    const j: any = await r.json();
+    const content = String(j.choices?.[0]?.message?.content ?? "").replace(/^```(?:json)?\s*|\s*```$/g, "");
+    const out = JSON.parse(content.slice(content.indexOf("{"), content.lastIndexOf("}") + 1));
+    const titles = (Array.isArray(out.titles) ? out.titles : [])
+      .map((t: any) => ({ title: text(t?.title, 120), inspired_by: text(t?.inspired_by, 200) }))
+      .filter((t: any) => t.title);
+    if (titles.length < 5) throw new Error(`only ${titles.length} titles`);
+    return c.json({
+      subject: text(out.subject, 300),
+      angles: (Array.isArray(out.angles) ? out.angles : []).map((a: unknown) => text(a, 200)).filter(Boolean).slice(0, 8),
+      titles,
+      model: j.model || c.env.GLM_MODEL || "glm-5.3-flash",
+    });
+  } catch (e: any) {
+    console.log("GLM failed", e?.message);
+    return c.json({ error: "GLM failed", fallback: true }, 503);
+  }
 });
 
 app.all("/api/*", (c) => c.json({ error: "Not found" }, 404));

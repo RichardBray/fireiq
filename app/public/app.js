@@ -54,7 +54,7 @@ const api = {
   related: (kw, o) => (connected() ? fc.related(kw, o) : fromSample("related", kw)),
   interest: (kws, o) => (connected() ? fc.interest(kws, o) : fromSample("interest", kws.length === 1 && kws[0])),
   youtubeTop: (kw) => (connected() ? fc.youtubeTop(kw) : fromSample("videos", kw)),
-  titleIdeas: (kw, tool, trending) => (connected() ? fc.titleIdeas(kw, tool, trending) : fromSample("ideas", kw)),
+  titleIdeas: (kw, tool, trending, videos) => (connected() ? fc.titleIdeas(kw, tool, trending, videos) : fromSample("ideas", kw)),
 };
 
 // ---------- account ----------
@@ -631,10 +631,10 @@ function sugReq(keyword) {
   if (!sugReqs.has(key)) {
     // Trending searches for the keyword (free if it was already researched on Overview) guide the writer
     // and give matching titles a ranking bonus. If Trends or the language model fails, carry on without.
-    // The language model scrapes YouTube itself, so it doesn't wait for the top videos.
+    // GLM writes from the top videos; if they fail, the Firecrawl fallback scrapes YouTube itself.
     const trending = api.related(keyword, state.result?.opts ?? opts()).then((r) => trendingFrom(r.data, keyword)).catch(() => []);
     const top = topReq(keyword);
-    const ideas = trending.then((t) => api.titleIdeas(keyword, "", t)).catch(() => null);
+    const ideas = Promise.all([trending, top.then((r) => r.data).catch(() => [])]).then(([t, videos]) => api.titleIdeas(keyword, "", t, videos)).catch(() => null);
     top.catch(() => sugReqs.delete(key));
     sugReqs.set(key, { top, trending, ideas });
   }
@@ -650,7 +650,7 @@ function prefetchSug(keyword) {
 const STEPS = [
   ["Reading YouTube's most-viewed videos", 300],
   ["Checking what people search for now", 250],
-  ["Writing titles with Firecrawl's language model", 350],
+  ["Writing titles with a language model", 350],
   ["Scoring and ranking", 200],
 ];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
