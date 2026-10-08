@@ -97,7 +97,7 @@ function renderBar() {
   if (!c || c.checking) return;
   const feedback = `<a href="about#feedback">Share feedback</a>`;
   if (!c.connected && SAMPLE) {
-    bar.innerHTML = `<span><b>Sample data.</b> You're exploring a saved run for “${esc(SAMPLE.seed)}”. <button class="linkbtn" data-connect="signin">Sign in</button> to research your own topics · ${feedback}</span>`;
+    bar.innerHTML = `<span><b>Sample data.</b> <span class="long">You're exploring a saved run for “${esc(SAMPLE.seed)}”. </span><button class="linkbtn" data-connect="signin">Sign in</button> to research your own topics <span class="nb">· ${feedback}</span></span>`;
     bar.hidden = false;
     return;
   }
@@ -373,7 +373,7 @@ function keywordCard() {
         ${c.explore_url ? `<a class="btn ghost" style="display:inline-flex;align-items:center" href="${esc(c.explore_url)}" target="_blank" rel="noopener">Open in Trends ↗</a>` : ""}
       </div>
     </div>
-    <div class="chart"><h4><span>Interest over time</span><span style="color:var(--dim)">hover for daily values</span></h4>
+    <div class="chart"><h4><span>Interest over time</span><span class="hover-hint" style="color:var(--dim)">hover for daily values</span></h4>
       ${!ins.interest ? `<div class="skel" style="height:230px"></div>` : ins.interest.error ? (ins.interest.auth ? connectCard(ins.interest.auth) : `<div class="err">${esc(ins.interest.error)}</div>`) : chart(ins.interest, [q], "kw")}
     </div>
   </div></div>`;
@@ -737,7 +737,13 @@ const goBtn = $("searchForm").querySelector('button[type="submit"]');
 goBtn.addEventListener("pointerenter", prefetch);
 goBtn.addEventListener("focus", prefetch);
 for (const id of ["time", "geo", "property"]) $(id).addEventListener("change", prefetch);
-document.querySelectorAll("[data-tab]").forEach((b) => (b.onclick = () => setTab(b.dataset.tab)));
+// At phone width the tabs sit in a menu behind the hamburger; picking one, tapping outside or Escape closes it.
+const topnav = document.querySelector(".topnav");
+const setMenu = (open) => { topnav.classList.toggle("open", open); $("menuBtn").setAttribute("aria-expanded", String(open)); };
+$("menuBtn").onclick = () => setMenu(!topnav.classList.contains("open"));
+document.addEventListener("click", (e) => { if (!e.target.closest(".topnav")) setMenu(false); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") setMenu(false); });
+document.querySelectorAll("[data-tab]").forEach((b) => (b.onclick = () => { setMenu(false); setTab(b.dataset.tab); }));
 
 // Opens on "claude code": live when connected (cached after the first load), otherwise the sample.
 const DEFAULT_TOPIC = SAMPLE?.seed ?? "claude code";
