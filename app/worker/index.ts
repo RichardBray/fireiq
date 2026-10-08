@@ -173,17 +173,20 @@ app.post("/api/llm/titles", async (c) => {
   if (!(await session(c))) return c.json({ error: "Connect Firecrawl to write titles.", auth: "missing" }, 401);
   const b: any = await c.req.json().catch(() => ({}));
   const keyword = text(b.keyword, 100);
-  const tool = text(b.tool, 60);
+  const about = text(b.about, 500);
   const trending = (Array.isArray(b.trending) ? b.trending : []).slice(0, 12).map((t: any) => `"${text(t?.query, 80)}" (${text(t?.label, 20)})`);
   const videos = (Array.isArray(b.videos) ? b.videos : []).slice(0, 30)
     .map((v: any) => `- ${text(v?.title, 150)} · ${Number(v?.views) || 0} views · ${text(v?.age, 20)} · ${text(v?.channel, 60)}`);
+  const patterns = (Array.isArray(b.patterns) ? b.patterns : []).slice(0, 8)
+    .map((p: any) => `${text(p?.name, 30)} ${Math.round((Number(p?.share) || 0) * 100)}% (e.g. "${text(p?.example, 150)}")`);
   if (!keyword || !videos.length) return c.json({ error: "Nothing to write titles from." }, 400);
-  const angle = tool ? `\n- The video's angle is ${tool}: every title must name ${tool}.` : "";
+  const angle = about ? `\n- The viewer's video: ${about}. Every title must be true to this video and never promise something it doesn't cover.` : "";
+  const winning = patterns.length ? `\n- Title patterns among these videos by share of total views: ${patterns.join("; ")}. Lean on the patterns that earn the most views here, and use at least 4 different patterns.` : "";
   const searching = trending.length ? `\n- People are searching YouTube for these right now: ${trending.join(", ")}. Work one of these into at least 4 of the titles, only where it reads naturally; never more than one per title.` : "";
   const prompt = `These are the most-viewed YouTube videos for "${keyword}":
 ${videos.join("\n")}
 
-Work out what the subject actually is and what makes viewers click. Then write 15 NEW titles for a video about "${keyword}". Rules:${angle}${searching}
+Work out what the subject actually is and what makes viewers click. Then write 15 NEW titles for a video about "${keyword}". Rules:${angle}${winning}${searching}
 - Be specific to this subject: use real names, features and comparisons from these videos, never filler like "game changer", "revolutionary" or "explored".
 - Use what works here: first-person framing ("I tested…", "I replaced…"), a surprising claim, a comparison, or a direct challenge to the viewer.
 - Never invent results or statistics. Only use a number if it appears in the list above.

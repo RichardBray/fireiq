@@ -154,12 +154,12 @@ export function parseResults(md) {
 
 // GLM writes titles from the top videos the app already has, through the Worker (/api/llm/titles, free
 // in Firecrawl credits). Any failure there, such as no GLM key or no balance, returns null.
-async function glmIdeas(keyword, tool, trending, videos) {
+async function glmIdeas(keyword, about, trending, videos, patterns) {
   try {
     const res = await fetch("/api/llm/titles", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ keyword, tool, trending, videos: videos.slice(0, 30).map(({ title, views, age, channel }) => ({ title, views, age, channel })) }),
+      body: JSON.stringify({ keyword, about, trending, patterns, videos: videos.slice(0, 30).map(({ title, views, age, channel }) => ({ title, views, age, channel })) }),
     });
     if (!res.ok) return null;
     const j = await res.json();
@@ -170,17 +170,19 @@ async function glmIdeas(keyword, tool, trending, videos) {
 // Without GLM, Firecrawl's JSON format runs a language model over the page it scrapes (+4 credits). Pointed
 // at YouTube's most-viewed results for a keyword, it reads what the subject is and what gets clicks, then
 // writes titles. `trending` is what people search alongside the keyword right now (from Trends), offered as
-// phrases the titles can use where they fit.
-export function titleIdeas(keyword, tool, trending = [], videos = [], fresh) {
+// phrases the titles can use where they fit. `patterns` are the title patterns that earn this keyword's views
+// (patterns() in titles.js), and `about` is the viewer's own description of their video.
+export function titleIdeas(keyword, { about = "", trending = [], videos = [], patterns = [] } = {}, fresh) {
   const phrases = trending.map((t) => t.query);
-  return cached({ titleIdeas: keyword.toLowerCase(), tool: tool.toLowerCase(), phrases }, fresh, async () => {
-    const glm = videos.length ? await glmIdeas(keyword, tool, trending, videos) : null;
+  return cached({ titleIdeas: keyword.toLowerCase(), about: about.toLowerCase(), phrases }, fresh, async () => {
+    const glm = videos.length ? await glmIdeas(keyword, about, trending, videos, patterns) : null;
     if (glm) return glm;
-    const angle = tool ? `\n- The video's angle is ${tool}: every title must name ${tool}.` : "";
+    const angle = about ? `\n- The viewer's video: ${about}. Every title must be true to this video and never promise something it doesn't cover.` : "";
+    const winning = patterns.length ? `\n- Title patterns among these videos by share of total views: ${patterns.map((p) => `${p.name} ${Math.round(p.share * 100)}% (e.g. "${p.example}")`).join("; ")}. Lean on the patterns that earn the most views here, and use at least 4 different patterns.` : "";
     const searching = phrases.length ? `\n- People are searching YouTube for these right now: ${trending.map((t) => `"${t.query}" (${t.label})`).join(", ")}. Work one of these into at least 4 of the titles, only where it reads naturally; never more than one per title.` : "";
     const prompt = `This page lists the most-viewed YouTube videos for "${keyword}". Read the titles, descriptions and view counts and work out what the subject actually is and what makes viewers click.
 
-Then write 15 NEW titles for a video about "${keyword}". Rules:${angle}${searching}
+Then write 15 NEW titles for a video about "${keyword}". Rules:${angle}${winning}${searching}
 - Be specific to this subject: use real names, features and comparisons from these videos, never filler like "game changer", "revolutionary" or "explored".
 - Use what works here: first-person framing ("I tested…", "I replaced…"), a surprising claim, a comparison, or a direct challenge to the viewer.
 - Never invent results or statistics. Only use a number if it appears on this page.

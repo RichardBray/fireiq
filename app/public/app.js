@@ -1,5 +1,5 @@
 import * as fc from "./lib/firecrawl.js";
-import { suggestTitles, relevant } from "./lib/titles.js";
+import { suggestTitles, relevant, patterns } from "./lib/titles.js";
 
 const MODEL = window.TITLE_MODEL;
 const SAMPLE = window.FIREIQ?.sample;
@@ -54,7 +54,7 @@ const api = {
   related: (kw, o) => (connected() ? fc.related(kw, o) : fromSample("related", kw)),
   interest: (kws, o) => (connected() ? fc.interest(kws, o) : fromSample("interest", kws.length === 1 && kws[0])),
   youtubeTop: (kw) => (connected() ? fc.youtubeTop(kw) : fromSample("videos", kw)),
-  titleIdeas: (kw, tool, trending, videos) => (connected() ? fc.titleIdeas(kw, tool, trending, videos) : fromSample("ideas", kw)),
+  titleIdeas: (kw, o) => (connected() ? fc.titleIdeas(kw, o) : fromSample("ideas", kw)),
 };
 
 // ---------- account ----------
@@ -585,9 +585,10 @@ function renderLab(v) {
   v.innerHTML = `
     <form class="search" id="sugForm">
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#8b90a3" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
-      <input id="sugKw" placeholder="What's your video about? e.g. claude code" autocomplete="off" spellcheck="false" value="${esc(state.sugKw ?? state.selected ?? "")}">
+      <input id="sugKw" placeholder="Keyword, e.g. claude code" autocomplete="off" spellcheck="false" value="${esc(state.sugKw ?? state.selected ?? "")}">
       <button class="btn" type="submit">Suggest 5 titles</button>
     </form>
+    ${connected() ? `<textarea id="sugAbout" class="about-input" rows="2" maxlength="500" placeholder="What's your video about? Optional, e.g. I replaced Cursor with Claude Code for a month and tracked what broke">${esc(state.sugAbout ?? "")}</textarea>` : ""}
     <div id="sug" style="margin-top:8px"></div>
     <div class="sec"><div class="sec-h"><h2>${STAR(true)}Saved titles</h2></div><div id="savedList"></div></div>`;
   renderSuggestions();
@@ -595,6 +596,11 @@ function renderLab(v) {
   const sugKw = $("sugKw"), sugBtn = $("sugForm").querySelector('button[type="submit"]');
   let sugTimer;
   sugKw.oninput = () => { clearTimeout(sugTimer); sugTimer = setTimeout(() => prefetchSug(sugKw.value), 1000); };
+  const sugAbout = $("sugAbout");
+  if (sugAbout) {
+    sugAbout.oninput = () => { clearTimeout(sugTimer); sugTimer = setTimeout(() => prefetchSug(sugKw.value), 1000); };
+    sugAbout.onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); suggest(false); } };
+  }
   sugBtn.addEventListener("pointerenter", () => prefetchSug(sugKw.value));
   sugBtn.addEventListener("focus", () => prefetchSug(sugKw.value));
   prefetchSug(sugKw.value);
@@ -626,7 +632,7 @@ function trendingFrom(d, keyword) {
 // pauses typing, heads for the button, or opens the Lab with a keyword already filled in, and suggest()
 // reuses the in-flight requests.
 const sugReqs = new Map();
-function sugReq(keyword) {
+function sugReq(keyword, about = "") {
   const key = keyword.toLowerCase();
   if (!sugReqs.has(key)) {
     // Trending searches for the keyword (free if it was already researched on Overview) guide the writer
@@ -634,15 +640,24 @@ function sugReq(keyword) {
     // GLM writes from the top videos; if they fail, the Firecrawl fallback scrapes YouTube itself.
     const trending = api.related(keyword, state.result?.opts ?? opts()).then((r) => trendingFrom(r.data, keyword)).catch(() => []);
     const top = topReq(keyword);
-    const ideas = Promise.all([trending, top.then((r) => r.data).catch(() => [])]).then(([t, videos]) => api.titleIdeas(keyword, "", t, videos)).catch(() => null);
     top.catch(() => sugReqs.delete(key));
-    sugReqs.set(key, { top, trending, ideas });
+    sugReqs.set(key, { top, trending, ideas: new Map() });
   }
-  return sugReqs.get(key);
+  const r = sugReqs.get(key);
+  // The description changes only what the language model writes, so each one gets its own ideas request.
+  about = about.trim();
+  if (!r.ideas.has(about)) {
+    const videos = r.top.then((t) => t.data).catch(() => []);
+    r.ideas.set(about, Promise.all([r.trending, videos])
+      .then(([trending, videos]) => api.titleIdeas(keyword, { about, trending, videos, patterns: patterns(relevant(keyword, videos)).slice(0, 6) }))
+      .catch(() => null));
+  }
+  return { top: r.top, trending: r.trending, ideas: r.ideas.get(about) };
 }
-function prefetchSug(keyword) {
+const aboutValue = () => (connected() ? $("sugAbout")?.value.trim() ?? "" : "");
+function prefetchSug(keyword, about = aboutValue()) {
   keyword = keyword.trim();
-  if (connected() && keyword.length >= 3) sugReq(keyword);
+  if (connected() && keyword.length >= 3) sugReq(keyword, about);
 }
 
 // Each step stays up for a minimum time even when its data was prefetched: an answer that appears
@@ -658,11 +673,13 @@ let sugRun = 0;
 async function suggest(more) {
   const keyword = $("sugKw").value.trim();
   if (!keyword) return;
-  const same = state.sugKw === keyword;
+  const about = aboutValue();
+  const same = state.sugKw === keyword && (state.sugAbout ?? "") === about;
   state.sugKw = keyword;
+  state.sugAbout = about;
   if (!more || !same) state.sugShown = [];
   const run = ++sugRun;
-  const req = sugReq(keyword);
+  const req = sugReq(keyword, about);
   const waits = [req.top, req.trending, req.ideas, null];
   state.sug = { loading: true, step: more && same ? STEPS.length - 1 : 0 };
   renderSuggestions();
@@ -704,7 +721,7 @@ function renderSuggestions() {
   el.innerHTML = `${s.subject ? `<div class="about"><b>What this is about:</b> ${esc(s.subject)}${s.angles?.length ? `<div class="angles">${s.angles.slice(0, 5).map((a) => `<span>${esc(a)}</span>`).join("")}</div>` : ""}</div>` : ""}
   <table class="sug"><thead><tr><th style="width:44px"></th><th>Title</th><th class="r">Score</th></tr></thead><tbody>
     ${s.titles.map((t, i) => `<tr data-t="${esc(t.title)}" class="${reveal ? "reveal" : ""}${state.open === t.title ? " open" : ""}"${fx(i)}><td class="star-cell"><button class="icon-btn star" data-star="${esc(t.title)}" title="Save">${STAR(isSaved(t.title))}</button></td><td><div>${esc(t.title)}<span class="pattern">${esc(t.pattern)}</span>${t.match ? `<span class="pattern match" title="Contains a phrase people are searching for now">🔍 ${esc(t.match.query)} · ${esc(t.match.label)}</span>` : ""}</div>
-      ${t.inspired_by ? `<div class="from">Inspired by <a href="${esc(t.inspired_url)}" target="_blank" rel="noopener">${esc(t.inspired_by)}</a>${t.inspired_views ? ` · ${fmt(t.inspired_views)} views` : ""}</div>` : `<div class="from">From title-score: one of the framings that lifts vidIQ's score most</div>`}</td>
+      ${t.inspired_by ? `<div class="from">Inspired by <a href="${esc(t.inspired_url)}" target="_blank" rel="noopener">${esc(t.inspired_by)}</a>${t.inspired_views ? ` · ${fmt(t.inspired_views)} views` : ""}</div>` : t.ai ? "" : `<div class="from">From title-score: one of the framings that lifts vidIQ's score most</div>`}</td>
       <td class="r">${scoreCell(t.score)}</td></tr>${detail(t.title, 3)}`).join("")}
   </tbody></table>
   <div class="note" style="display:flex;justify-content:space-between;align-items:center;gap:12px"><span>Click a title to see what's moving its score.</span><button class="btn ghost" id="moreT" style="height:34px">Suggest 5 more</button></div>

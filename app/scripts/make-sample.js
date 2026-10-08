@@ -42,7 +42,7 @@ const trendingFrom = (d, keyword) => {
 const ideas = {};
 for (const k of [seed, ...keywords.slice(0, 2)]) {
   related[k] ??= await run(`trends for ${k}`, fc.related(k, opts)).catch(() => null);
-  ideas[k] = await run(`title ideas for ${k}`, fc.titleIdeas(k, "", trendingFrom(related[k], k))).catch((e) => log(`title ideas for ${k} failed: ${e.message}`));
+  ideas[k] = await run(`title ideas for ${k}`, fc.titleIdeas(k, { trending: trendingFrom(related[k], k) })).catch((e) => log(`title ideas for ${k} failed: ${e.message}`));
 }
 
 const prune = (o) => Object.fromEntries(Object.entries(o).filter(([, v]) => v));

@@ -75,7 +75,7 @@ function competitors(keyword, real) {
 export function patterns(real) {
   const total = real.reduce((n, v) => n + v.views, 0) || 1;
   return Object.entries(DETECTORS)
-    .map(([name, re]) => { const hits = real.filter((v) => re.test(v.title)); return { name, videos: hits.length, share: hits.reduce((n, v) => n + v.views, 0) / total }; })
+    .map(([name, re]) => { const hits = real.filter((v) => re.test(v.title)).sort((a, b) => b.views - a.views); return { name, videos: hits.length, share: hits.reduce((n, v) => n + v.views, 0) / total, example: hits[0]?.title }; })
     .filter((p) => p.videos > 0)
     .sort((a, b) => b.share - a.share);
 }
@@ -186,13 +186,13 @@ export function suggestTitles(keyword, tool, videos, score, exclude = [], ideas 
   };
   const rank = (s) => s.score + (s.match?.bonus ?? 0);
   const pool = [];
-  const add = (title, pattern, src) => {
+  const add = (title, pattern, src, ai = false) => {
     // Models still slip in em dashes despite the prompt, and adapted top titles can carry them.
     title = title.replace(/\s*[—–]\s*/g, (_, i, s) => (i === 0 || i + _.length === s.length ? "" : s.includes(":") ? " - " : ": ")).replace(/\s+/g, " ").trim();
     const l = title.toLowerCase();
     if (title.length > 80 || pool.some((s) => s.title.toLowerCase() === l) || real.some((v) => v.title.toLowerCase() === l))
       return;
-    pool.push({ title, pattern, score: score(title), match: searchMatch(title), inspired_by: src?.title ?? "", inspired_url: src?.url || null, inspired_views: src?.views || null });
+    pool.push({ title, pattern, ai, score: score(title), match: searchMatch(title), inspired_by: src?.title ?? "", inspired_url: src?.url || null, inspired_views: src?.views || null });
   };
   const vs = keyword.trim().match(/^(.+?)\s+(?:vs\.?|versus|or)\s+(.+)$/i);
   const task = keyword.trim().match(/^how (?:to|do i|can i)\s+(.+)$/i);
@@ -203,11 +203,15 @@ export function suggestTitles(keyword, tool, videos, score, exclude = [], ideas 
         : templates(K, base, C, T, year);
   // Titles written by the language model come first; the templates only fill in when it returned too few.
   const patternOf = (t) => Object.keys(DETECTORS).find((p) => !["Year", "Brackets"].includes(p) && DETECTORS[p].test(t)) ?? "Fresh angle";
-  const findVideo = (title) => { const l = title.toLowerCase().slice(0, 40); return real.find((v) => v.title.toLowerCase().startsWith(l)) ?? videos.find((v) => v.title.toLowerCase().startsWith(l)); };
-  for (const i of ideas?.titles ?? []) {
-    const src = findVideo(i.inspired_by);
-    add(i.title.replace(/!+/g, "!"), patternOf(i.title), src ?? { title: i.inspired_by, url: "", views: 0 });
-  }
+  // A model can name an inspiration that isn't one of the real videos, so only a match with a real title counts.
+  const norm = (s) => (s ?? "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+  const findVideo = (title) => {
+    const l = norm(title).slice(0, 40);
+    if (l.length < 10) return null;
+    return real.find((v) => norm(v.title).startsWith(l)) ?? videos.find((v) => norm(v.title).startsWith(l)) ?? null;
+  };
+  for (const i of ideas?.titles ?? [])
+    add(i.title.replace(/!+/g, "!"), patternOf(i.title), findVideo(i.inspired_by), true);
   const fromIdeas = pool.length;
   if (fromIdeas < 8) {
     for (const [p, list] of set) {
