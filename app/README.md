@@ -21,6 +21,14 @@ echo "COOKIE_SECRET=$(openssl rand -base64 48)" > .dev.vars
 bunx wrangler dev
 ```
 
+## Sample data
+
+Signed out, fireIQ runs on a saved sample for one topic (`public/data.js`): its keywords, charts and top videos for the leading ones, and title ideas for three. To rebuild it, which costs about 100 credits:
+
+```sh
+FIRECRAWL_API_KEY=fc-... bun scripts/make-sample.js "claude code"
+```
+
 ## Deploy
 
 ```sh
@@ -38,7 +46,7 @@ bunx wrangler deploy
 | A keyword's top videos (fetched when you click the keyword) | 2 |
 | Suggest titles (top videos + trending searches + Firecrawl's language model) | up to 12, less for keywords you've already researched; "Suggest 5 more" is free |
 
-Title Lab starts loading suggestions before you press **Suggest**: when it opens with a keyword filled in, when you pause typing a keyword, or when you point at the button. So opening the Lab with a new keyword spends those credits even if you never press it.
+Titles start loading before you ask for them: for the keyword a search selects (once its chart and videos are in), when you point at a keyword's **Suggest titles** button, when the Lab opens with a keyword filled in, when you pause typing one, or when you point at **Suggest 5 titles**. So a search costs about 10 credits more than the table shows, even if you never open the Lab.
 
 ## How title suggestions work
 

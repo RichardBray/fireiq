@@ -2,7 +2,7 @@ import * as fc from "./lib/firecrawl.js";
 import { suggestTitles, relevant } from "./lib/titles.js";
 
 const MODEL = window.TITLE_MODEL;
-const SNAPSHOT = window.FIREIQ;
+const SAMPLE = window.FIREIQ?.sample;
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const fmt = (n) => (n == null ? "–" : n >= 1e6 ? (n / 1e6).toFixed(1).replace(/\.0$/, "") + "M" : n >= 1e3 ? Math.round(n / 1e3) + "k" : String(n));
@@ -31,15 +31,31 @@ const state = {
   videoKw: null,
   vidMode: "hot",
   jobs: { total: 0, done: 0, label: "" },
-  lab: store.get("fireiq.labTitle", ""),
+  open: null,
 };
 
 // ---------- data ----------
 // Firecrawl calls go through the Worker; an auth problem refreshes the nav so it shows what's wrong.
 async function call(p) {
   try { return await p; }
-  catch (e) { if (e.auth) checkConnection(); throw e; }
+  catch (e) { if (e.auth && e.auth !== "sample") checkConnection(); throw e; }
 }
+
+// Signed out, every tab runs on a saved sample (public/data.js, made by scripts/make-sample.js), so
+// people can try fireIQ before connecting. Anything outside the sample asks them to sign in.
+const fromSample = (kind, key) => {
+  const data = key && SAMPLE?.[kind]?.[key.toLowerCase()];
+  if (data) return Promise.resolve({ data, credits: 0, cached: true });
+  const e = new Error("Sign in to research beyond the sample.");
+  e.auth = "sample";
+  return Promise.reject(e);
+};
+const api = {
+  related: (kw, o) => (connected() ? fc.related(kw, o) : fromSample("related", kw)),
+  interest: (kws, o) => (connected() ? fc.interest(kws, o) : fromSample("interest", kws.length === 1 && kws[0])),
+  youtubeTop: (kw) => (connected() ? fc.youtubeTop(kw) : fromSample("videos", kw)),
+  titleIdeas: (kw, tool, trending) => (connected() ? fc.titleIdeas(kw, tool, trending) : fromSample("ideas", kw)),
+};
 
 // ---------- account ----------
 // /api/me checks the cookie's key with Firecrawl, so the nav reflects what actually works.
@@ -49,12 +65,15 @@ async function checkConnection() {
   try { state.conn = await (await fetch("/api/me")).json(); }
   catch { state.conn = { connected: false, error: "Can't reach fireIQ." }; }
   renderAccount();
+  // Results from the sample and live ones never mix: switching either way starts over.
+  const reset = () => { related.clear(); sugReqs.clear(); tops.clear(); state.videos = {}; state.sug = null; };
   if (state.conn.connected) {
-    state.blocked = false;
-    // Connecting after the saved snapshot was shown: swap it for live results.
-    if (state.result && !state.result.live) research(parseSeeds($("q").value), opts(), true);
+    if (state.result && !state.result.live) { reset(); research(parseSeeds($("q").value), opts(), true); }
     else render();
+  } else if (state.result?.live) {
+    reset(); $("q").value = DEFAULT_TOPIC; research([DEFAULT_TOPIC], opts(), true);
   }
+  renderBar();
   return state.conn;
 }
 const SIGN_IN = `<button class="btn" data-connect="signin"><img class="fcmark" src="firecrawl-logo.svg" alt="">Sign in<span class="long"> with Firecrawl</span></button>`;
@@ -71,7 +90,24 @@ function renderAccount() {
   };
 }
 const connected = () => !!state.conn?.connected;
+// One bar above the nav. Signed out it says the page is showing the sample; signed in it's a closable
+// work-in-progress note. It stays hidden until the connection check settles, so it doesn't flicker.
+function renderBar() {
+  const bar = $("wip"), c = state.conn;
+  if (!c || c.checking) return;
+  const feedback = `<a href="about#feedback">Share feedback</a>`;
+  if (!c.connected && SAMPLE) {
+    bar.innerHTML = `<span><b>Sample data.</b> You're exploring a saved run for “${esc(SAMPLE.seed)}”. <button class="linkbtn" data-connect="signin">Sign in</button> to research your own topics · ${feedback}</span>`;
+    bar.hidden = false;
+    return;
+  }
+  bar.innerHTML = `<span><b>Work in progress.</b> fireIQ is still being built, so features may change. <a href="about">What is fireIQ?</a> · ${feedback}</span><button id="wipClose" aria-label="Close" title="Close">✕</button>`;
+  bar.hidden = store.get("fireiq.wipClosed", false);
+  $("wipClose").onclick = () => { bar.hidden = true; store.set("fireiq.wipClosed", true); };
+}
 function connectCard(reason) {
+  if (reason === "sample") return `<div class="connect"><img src="firecrawl-logo.svg" alt="" class="big"><h3>Sign in to go beyond the sample</h3><p>Signed out, fireIQ only has sample data for “${esc(SAMPLE?.seed)}” and a few of its keywords. Connect Firecrawl to research anything, on your own account. The free plan includes 1,000 credits a month.</p>
+    <div class="acts" style="flex-direction:column;align-items:center"><button class="btn" data-connect="signin"><img class="fcmark" src="firecrawl-logo.svg" alt="">Sign in with Firecrawl</button><button class="linkish" data-connect="key">Use an API key instead</button></div></div>`;
   const rejected = reason === "rejected" || state.conn?.rejected;
   const title = reason === "credits" ? "Your Firecrawl account is out of credits" : rejected ? "Firecrawl rejected your API key" : "Connect Firecrawl to run live research";
   const body = reason === "credits" ? "Add credits or upgrade your plan on firecrawl.dev, then try again."
@@ -81,6 +117,8 @@ function connectCard(reason) {
     ${reason === "credits" ? `<a class="btn" href="https://www.firecrawl.dev/app" target="_blank" rel="noopener" style="display:inline-flex;align-items:center">Open Firecrawl</a>`
       : `<div class="acts" style="flex-direction:column;align-items:center"><button class="btn" data-connect="signin"><img class="fcmark" src="firecrawl-logo.svg" alt="">Sign in with Firecrawl</button><button class="linkish" data-connect="key">Use an API key instead</button></div>`}</div>`;
 }
+// Pointing at a keyword's "Suggest titles" button starts its titles.
+document.addEventListener("pointerover", (e) => { const b = e.target.closest?.("[data-lab]"); if (b) prefetchSug(b.dataset.lab); });
 document.addEventListener("click", (e) => {
   const c = e.target.closest("[data-connect]");
   if (c) c.dataset.connect === "key" ? openKey() : signIn();
@@ -168,7 +206,7 @@ const cand = (q) => allKw().find((c) => c.query === q) || { query: q, seeds: [] 
 const related = new Map();
 function relatedReq(seed, o) {
   const key = JSON.stringify([seed, o]);
-  if (!related.has(key)) related.set(key, call(fc.related(seed, o)).catch((e) => { related.delete(key); throw e; }));
+  if (!related.has(key)) related.set(key, call(api.related(seed, o)).catch((e) => { related.delete(key); throw e; }));
   return related.get(key);
 }
 const parseSeeds = (text) => [...new Set(text.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean))].slice(0, 6);
@@ -178,11 +216,9 @@ function prefetch() {
 }
 
 async function research(seeds, opts, keepTab = false) {
-  if (state.conn && !state.conn.checking && !connected()) { state.blocked = true; setTab("foryou"); return; }
-  state.blocked = false;
   seeds = parseSeeds(seeds.join(","));
   if (!seeds.length) return;
-  state.result = { seeds, opts, related: Object.fromEntries(seeds.map((s) => [s, { loading: true }])), live: true };
+  state.result = { seeds, opts, related: Object.fromEntries(seeds.map((s) => [s, { loading: true }])), live: connected() };
   state.selected = null; state.filter = "all"; state.insight = {}; state.compare = []; state.comparison = null;
   if (keepTab) render(); else setTab("foryou");
   await Promise.all(seeds.map(async (seed) => {
@@ -191,7 +227,13 @@ async function research(seeds, opts, keepTab = false) {
     catch (e) { state.result.related[seed] = { error: e.message, auth: e.auth }; }
     done(); render();
   }));
-  if (!state.selected && all()[0]) select(all()[0].query);
+  if (state.selected || !all()[0]) return;
+  const q = all()[0].query, r = state.result;
+  await select(q);
+  // The Title Lab opens on the selected keyword, so its titles are the likeliest next ask. They start
+  // once the chart and videos are in, so they don't hold those up, and only if this is still the search.
+  await topReq(q).catch(() => {});
+  if (state.result === r && state.selected === q) prefetchSug(q);
 }
 
 async function select(query, scroll) {
@@ -203,10 +245,10 @@ async function select(query, scroll) {
   const tasks = [];
   if (!ins.interest) tasks.push((async () => {
     const done = job(`Charting “${query}”`);
-    try { ins.interest = (await call(fc.interest([query], r.opts))).data; } catch (e) { ins.interest = { error: e.message, auth: e.auth }; }
+    try { ins.interest = (await call(api.interest([query], r.opts))).data; } catch (e) { ins.interest = { error: e.message, auth: e.auth }; }
     done(); render();
   })());
-  if (connected()) fetchVideos(query);
+  fetchVideos(query);
   await Promise.all(tasks);
 }
 
@@ -221,16 +263,6 @@ function momentum(interest, query) {
   return { change: earlier ? Math.round((recent / earlier - 1) * 100) : 100 };
 }
 
-// Offline fallback: the saved Oct 6 run, narrowed to one of its topics.
-function openSnapshot(seed) {
-  const t = SNAPSHOT.trends;
-  state.result = { seeds: [seed], opts: { geo: t.geo, time: t.time, property: t.property }, live: false,
-    candidates: t.candidates.filter((c) => c.seeds.includes(seed)).map((c) => ({ ...c, seeds: [seed], top: c.top == null ? null : Number(c.top) })) };
-  state.selected = null; state.filter = "all"; state.insight = {}; state.compare = []; state.comparison = null;
-  $("q").value = seed;
-  setTab("foryou");
-}
-
 // ---------- rendering ----------
 function setTab(tab) {
   state.tab = tab;
@@ -242,7 +274,6 @@ function render() {
   $("pageTitle").textContent = state.tab === "lab" ? "Title Lab" : "Research";
   $("searchForm").style.display = state.tab === "lab" ? "none" : "";
   if (state.tab === "lab") return renderLab(v);
-  if (state.blocked && !connected()) { v.innerHTML = connectCard(); return; }
   if (!state.result) { v.innerHTML = `<div class="empty">Search for a topic to start.</div>`; return; }
   renderCompareBar();
   if (state.tab === "keywords") return renderKeywords(v);
@@ -337,7 +368,7 @@ function keywordCard() {
         <div class="stat"><div class="k">Last 7 days</div><div class="v">${mv}</div></div>
       </div>
       <div class="acts">
-        <button class="btn" data-lab="${esc(q)}">Score as a title</button>
+        <button class="btn" data-lab="${esc(q)}">Suggest titles</button>
         <button class="btn ghost" data-videos="${esc(q)}">Top videos</button>
         ${c.explore_url ? `<a class="btn ghost" style="display:inline-flex;align-items:center" href="${esc(c.explore_url)}" target="_blank" rel="noopener">Open in Trends ↗</a>` : ""}
       </div>
@@ -355,7 +386,7 @@ async function runCompare() {
   setTab("foryou");
   scrollTo({ top: 0, behavior: "smooth" });
   const done = job(`Comparing ${keys.length} keywords`);
-  try { state.comparison.data = (await call(fc.interest(keys, r.opts))).data; }
+  try { state.comparison.data = (await call(api.interest(keys, r.opts))).data; }
   catch (e) { state.comparison.data = { error: e.message, auth: e.auth }; }
   done();
   render();
@@ -409,11 +440,22 @@ function renderKeywords(v) {
 
 // Videos: YouTube's most-viewed results for a keyword. The outlier multiple compares each video with the
 // median of these results (vidIQ compares with the channel's own average, which needs channel data).
+// Videos and title suggestions both start from a keyword's top videos; they share one request.
+const tops = new Map();
+function topReq(keyword) {
+  const key = keyword.toLowerCase();
+  if (!tops.has(key)) {
+    const p = call(api.youtubeTop(keyword));
+    p.catch(() => tops.delete(key));
+    tops.set(key, p);
+  }
+  return tops.get(key);
+}
 async function fetchVideos(keyword) {
   if (state.videos[keyword]) return;
   state.videos[keyword] = { loading: true };
   const done = job(`Top YouTube videos for “${keyword}”`);
-  try { state.videos[keyword] = { list: relevant(keyword, (await call(fc.youtubeTop(keyword))).data) }; }
+  try { state.videos[keyword] = { list: relevant(keyword, (await topReq(keyword)).data) }; }
   catch (e) { state.videos[keyword] = { error: e.message, auth: e.auth }; }
   done();
   if (state.tab === "videos") render();
@@ -440,8 +482,8 @@ function videoCard(v, mult) {
 function renderVideos(v) {
   const r = state.result;
   const kw = state.videoKw || state.selected || r.seeds[0];
-  if (!state.videos[kw] && connected()) fetchVideos(kw);
-  const d = state.videos[kw] || (connected() ? { loading: true } : { error: "Not connected", auth: "missing" });
+  if (!state.videos[kw]) fetchVideos(kw);
+  const d = state.videos[kw] || { loading: true };
   const opts = [...new Set([...r.seeds, ...(state.selected ? [state.selected] : []), kw])];
   const pick = `<div class="chips">${opts.map((k) => `<button class="chip ${k === kw ? "on" : ""}" data-vk="${esc(k)}">${esc(k)}</button>`).join("")}</div>`;
   if (d.loading) { v.innerHTML = `<div class="sec">${pick}<div class="grid-videos">${Array.from({ length: 8 }, () => `<div><div class="skel" style="aspect-ratio:16/9;margin-bottom:10px"></div><div class="skel" style="height:13px;margin-bottom:6px"></div><div class="skel" style="height:13px;width:60%"></div></div>`).join("")}</div></div>`; wireVideos(v); return; }
@@ -485,7 +527,7 @@ function wire(v) {
     const vid = t.closest("[data-videos]"); if (vid) { state.videoKw = vid.dataset.videos; return setTab("videos"); }
     const cmp = t.closest("[data-cmp]"); if (cmp?.dataset.cmp === "close") { state.comparison = null; return render(); }
     const f = t.closest("[data-f]"); if (f) { state.filter = f.dataset.f; return render(); }
-    const lab = t.closest("[data-lab]"); if (lab) { state.lab = lab.dataset.lab; return setTab("lab"); }
+    const lab = t.closest("[data-lab]"); if (lab) { state.sugKw = lab.dataset.lab; setTab("lab"); return suggest(false); }
     const row = t.closest("[data-q]"); if (row) { if (state.tab !== "foryou") setTab("foryou"); select(row.dataset.q, true); }
   };
 }
@@ -514,50 +556,40 @@ function refreshSaved() {
   const el = $("savedList"); if (!el) return;
   const list = saved().map((x) => ({ ...x, score: scoreTitle(x.title, MODEL).score })).sort((a, b) => b.score - a.score);
   el.innerHTML = list.length ? `<table><thead><tr><th>Title</th><th class="r">Score</th><th class="r" style="width:96px"></th></tr></thead><tbody>
-    ${list.map((r) => `<tr data-t="${esc(r.title)}"><td class="kw">${esc(r.title)}${r.keyword ? `<span class="pattern">${esc(r.keyword)}</span>` : ""}</td>
-      <td class="r"><span class="badge ${r.score >= 70 ? "b-green" : r.score >= 50 ? "b-amber" : "b-red"}">${r.score}</span></td>
-      <td class="r acts-cell"><button class="icon-btn" data-copy="${esc(r.title)}" title="Copy">Copy</button><button class="icon-btn" data-unsave="${esc(r.title)}" title="Remove">✕</button></td></tr>`).join("")}
-  </tbody></table>` : `<div class="empty">Star a suggested title, or the one you're editing above, to keep it here.</div>`;
-  const input = $("labIn");
-  if (input) { const on = isSaved(input.value); $("saveT").innerHTML = `${STAR(on)}${on ? "Saved" : "Save"}`; $("saveT").classList.toggle("saved", on); }
+    ${list.map((r) => `<tr data-t="${esc(r.title)}" class="${state.open === r.title ? "open" : ""}"><td class="kw">${esc(r.title)}${r.keyword ? `<span class="pattern">${esc(r.keyword)}</span>` : ""}</td>
+      <td class="r">${scoreCell(r.score)}</td>
+      <td class="r acts-cell"><button class="icon-btn" data-copy="${esc(r.title)}" title="Copy">Copy</button><button class="icon-btn" data-unsave="${esc(r.title)}" title="Remove">✕</button></td></tr>${detail(r.title, 3)}`).join("")}
+  </tbody></table>` : `<div class="empty">Star a suggested title to keep it here.</div>`;
   document.querySelectorAll("[data-star]").forEach((b) => { const on = isSaved(b.dataset.star); b.innerHTML = STAR(on); b.classList.toggle("on", on); });
 }
+// A title's score and the factors that moved it most, shown when its row is opened.
+const badge = (n) => `<span class="badge ${n >= 70 ? "b-green" : n >= 50 ? "b-amber" : "b-red"}">${n}</span>`;
+const scoreCell = (n) => `${badge(n)}<svg class="chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>`;
+function breakdown(title) {
+  const r = scoreTitle(title, MODEL);
+  const a = Math.PI * (1 - r.score / 100), x = 100 + 80 * Math.cos(a), y = 100 - 80 * Math.sin(a);
+  const rows = Object.entries(r.contributions).map(([k, v]) => [NAMES[k] || k, v]);
+  if (Math.abs(r.vocab) >= 0.5) rows.push(["Topic words", r.vocab]);
+  rows.sort((p, q) => Math.abs(q[1]) - Math.abs(p[1]));
+  const max = Math.max(5, ...rows.map((p) => Math.abs(p[1])));
+  return `<div class="why">
+    <div class="gauge"><svg viewBox="0 0 200 110" width="100%" style="max-width:180px"><path d="M20 100 A80 80 0 0 1 180 100" fill="none" stroke="#1f2433" stroke-width="14" stroke-linecap="round"/>${r.score ? `<path d="M20 100 A80 80 0 0 1 ${x.toFixed(1)} ${y.toFixed(1)}" fill="none" stroke="${col(r.score)}" stroke-width="14" stroke-linecap="round"/>` : ""}</svg>
+      <div class="n" style="color:${col(r.score)}">${r.score}</div><div class="l">out of 100 · ${r.chars} chars · ${r.words} words</div>
+      <div class="v">${r.score >= 70 ? "Strong title" : r.score >= 50 ? "Could be stronger" : "Weak title"}</div></div>
+    <div><h4>What's moving the score</h4>${rows.slice(0, 8).map(([n, val]) => { const w = (Math.abs(val) / max) * 50, pos = val >= 0; return `<div class="factor"><span class="name">${esc(n)}</span><div class="fbar"><i style="left:${pos ? 50 : 50 - w}%;width:${w}%;background:${pos ? "var(--green)" : "var(--red)"}"></i></div><span class="val" style="color:${pos ? "var(--green)" : "var(--red)"}">${pos ? "+" : ""}${val.toFixed(1)}</span></div>`; }).join("") || `<div class="empty" style="padding:8px 0">Nothing stands out.</div>`}</div>
+  </div>`;
+}
+const detail = (title, cols) => (state.open === title ? `<tr class="detail"><td colspan="${cols}">${breakdown(title)}</td></tr>` : "");
+
 function renderLab(v) {
   v.innerHTML = `
-    <div class="sec"><div class="search" style="height:56px"><input id="labIn" placeholder="Type a title to score…" autocomplete="off" spellcheck="false" style="font-size:17px;font-weight:700"><button class="btn ghost star-btn" id="saveT"></button></div></div>
-    <div class="lab">
-      <div class="panel gauge" id="gauge"></div>
-      <div class="panel"><div class="sec-h"><h2>What's moving the score</h2></div><div id="factors"></div>
-        </div>
-    </div>
-    <div class="sec">${head("fire", "Suggested titles")}
-      <div class="panel">
-        <form class="suggest" id="sugForm">
-          <input id="sugKw" placeholder="Keyword, e.g. vidiq alternative" value="${esc(state.sugKw ?? state.selected ?? "")}">
-          <button class="btn" type="submit">Suggest 5 titles</button>
-        </form>
-        <div id="sug" style="margin-top:6px"></div>
-      </div>
-    </div>
+    <form class="search" id="sugForm">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#8b90a3" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input id="sugKw" placeholder="What's your video about? e.g. claude code" autocomplete="off" spellcheck="false" value="${esc(state.sugKw ?? state.selected ?? "")}">
+      <button class="btn" type="submit">Suggest 5 titles</button>
+    </form>
+    <div id="sug" style="margin-top:8px"></div>
     <div class="sec"><div class="sec-h"><h2>${STAR(true)}Saved titles</h2></div><div id="savedList"></div></div>`;
-  const input = $("labIn");
-  input.value = state.lab;
-  const update = () => {
-    state.lab = input.value; store.set("fireiq.labTitle", state.lab);
-    const t = input.value.trim();
-    const r = t ? scoreTitle(t, MODEL) : { score: 0, chars: 0, words: 0, contributions: {}, vocab: 0 };
-    const a = Math.PI * (1 - r.score / 100), x = 100 + 80 * Math.cos(a), y = 100 - 80 * Math.sin(a);
-    $("gauge").innerHTML = `<svg viewBox="0 0 200 110" width="100%" style="max-width:240px"><path d="M20 100 A80 80 0 0 1 180 100" fill="none" stroke="#1f2433" stroke-width="14" stroke-linecap="round"/>${r.score ? `<path d="M20 100 A80 80 0 0 1 ${x.toFixed(1)} ${y.toFixed(1)}" fill="none" stroke="${col(r.score)}" stroke-width="14" stroke-linecap="round"/>` : ""}</svg>
-      <div class="n" style="color:${t ? col(r.score) : "var(--dim)"}">${r.score}</div><div class="l">out of 100 · ${r.chars} chars · ${r.words} words</div>
-      <div class="v">${!t ? "Type a title" : r.score >= 70 ? "Strong title" : r.score >= 50 ? "Could be stronger" : "Weak title"}</div>`;
-    const rows = Object.entries(r.contributions).map(([k, v]) => [NAMES[k] || k, v]);
-    if (Math.abs(r.vocab) >= 0.5) rows.push(["Topic words", r.vocab]);
-    rows.sort((p, q) => Math.abs(q[1]) - Math.abs(p[1]));
-    const max = Math.max(5, ...rows.map((p) => Math.abs(p[1])));
-    $("factors").innerHTML = rows.slice(0, 8).map(([n, val]) => { const w = (Math.abs(val) / max) * 50, pos = val >= 0; return `<div class="factor"><span class="name">${esc(n)}</span><div class="fbar"><i style="left:${pos ? 50 : 50 - w}%;width:${w}%;background:${pos ? "var(--green)" : "var(--red)"}"></i></div><span class="val" style="color:${pos ? "var(--green)" : "var(--red)"}">${pos ? "+" : ""}${val.toFixed(1)}</span></div>`; }).join("") || `<div class="empty" style="padding:8px 0">Nothing yet.</div>`;
-  };
-  input.oninput = update;
-  update();
   renderSuggestions();
   $("sugForm").onsubmit = (e) => { e.preventDefault(); suggest(false); };
   const sugKw = $("sugKw"), sugBtn = $("sugForm").querySelector('button[type="submit"]');
@@ -566,19 +598,21 @@ function renderLab(v) {
   sugBtn.addEventListener("pointerenter", () => prefetchSug(sugKw.value));
   sugBtn.addEventListener("focus", () => prefetchSug(sugKw.value));
   prefetchSug(sugKw.value);
-  $("saveT").onclick = () => toggleSave(input.value, state.sugKw ?? "");
-  input.addEventListener("input", refreshSaved);
   refreshSaved();
   v.onclick = (e) => {
     if (e.target.closest("#moreT")) return suggest(true);
+    const sk = e.target.closest("[data-sk]"); if (sk) { $("sugKw").value = sk.dataset.sk; return suggest(false); }
     const star = e.target.closest("[data-star]"); if (star) return toggleSave(star.dataset.star, state.sugKw ?? "");
     const un = e.target.closest("[data-unsave]"); if (un) return toggleSave(un.dataset.unsave);
     const cp = e.target.closest("[data-copy]");
     if (cp) { navigator.clipboard?.writeText(cp.dataset.copy).then(() => { cp.textContent = "Copied"; setTimeout(() => (cp.textContent = "Copy"), 1200); }); return; }
-    if (e.target.closest("a")) return;
-    const r = e.target.closest("[data-t]"); if (r) { state.lab = r.dataset.t; input.value = r.dataset.t; update(); scrollTo({ top: 0, behavior: "smooth" }); }
+    if (e.target.closest("a, .detail")) return;
+    const r = e.target.closest("[data-t]");
+    if (r) { state.open = state.open === r.dataset.t ? null : r.dataset.t; renderSuggestions(); refreshSaved(); }
   };
-  input.focus();
+  if (!state.sug) sugKw.focus();
+  // Signed out, the sample's titles show straight away rather than behind a button that looks like it costs something.
+  if (!state.sug && !connected() && SAMPLE?.ideas[sugKw.value.trim().toLowerCase()]) suggest(false);
 }
 
 // "more" asks for 5 titles that haven't been shown yet for this keyword.
@@ -598,9 +632,9 @@ function sugReq(keyword) {
     // Trending searches for the keyword (free if it was already researched on Overview) guide the writer
     // and give matching titles a ranking bonus. If Trends or the language model fails, carry on without.
     // The language model scrapes YouTube itself, so it doesn't wait for the top videos.
-    const trending = fc.related(keyword, state.result?.opts ?? opts()).then((r) => trendingFrom(r.data, keyword)).catch(() => []);
-    const top = call(fc.youtubeTop(keyword));
-    const ideas = trending.then((t) => fc.titleIdeas(keyword, "", t)).catch(() => null);
+    const trending = api.related(keyword, state.result?.opts ?? opts()).then((r) => trendingFrom(r.data, keyword)).catch(() => []);
+    const top = topReq(keyword);
+    const ideas = trending.then((t) => api.titleIdeas(keyword, "", t)).catch(() => null);
     top.catch(() => sugReqs.delete(key));
     sugReqs.set(key, { top, trending, ideas });
   }
@@ -626,7 +660,6 @@ async function suggest(more) {
   if (!keyword) return;
   const same = state.sugKw === keyword;
   state.sugKw = keyword;
-  if (!connected()) { state.sug = { error: "Not connected", auth: state.conn?.rejected ? "rejected" : "missing" }; return renderSuggestions(); }
   if (!more || !same) state.sugShown = [];
   const run = ++sugRun;
   const req = sugReq(keyword);
@@ -656,24 +689,25 @@ async function suggest(more) {
 function renderSuggestions() {
   const el = $("sug"); if (!el) return;
   const s = state.sug;
-  if (!s) { el.innerHTML = `<div class="note">Reads the most-viewed YouTube videos for the keyword with Firecrawl, works out what the subject is and which title patterns earn the most views, writes 15 new titles, then shows the 5 that score highest. Edit them so they match your video.</div>`; return; }
+  const tryThese = !connected() && SAMPLE ? `<div class="chips" style="margin-top:12px"><span class="note" style="margin:0;align-self:center">Sample titles are ready for</span>${Object.keys(SAMPLE.ideas).map((k) => `<button class="chip" data-sk="${esc(k)}">${esc(k)}</button>`).join("")}</div>` : "";
+  if (!s) { el.innerHTML = `${tryThese}<div class="note">Reads the most-viewed YouTube videos for the keyword with Firecrawl, works out what the subject is and which title patterns earn the most views, writes 15 new titles, then shows the 5 that score highest. Edit them so they match your video.</div>`; return; }
   if (s.loading) {
     el.innerHTML = `<ol class="steps">${STEPS.map(([t], i) => `<li class="${i < s.step ? "done" : i === s.step ? "on" : ""}">${i === s.step ? `<span class="spin"></span>` : `<span class="tick"></span>`}${esc(t)}</li>`).join("")}</ol>
       ${Array.from({ length: 5 }, () => `<div class="skel" style="height:48px;margin-top:8px"></div>`).join("")}`;
     return;
   }
-  if (s.error) { el.innerHTML = s.auth ? connectCard(s.auth) : `<div class="err" style="margin-top:10px">${esc(s.error)}</div>`; return; }
+  if (s.error) { el.innerHTML = tryThese + (s.auth ? connectCard(s.auth) : `<div class="err" style="margin-top:10px">${esc(s.error)}</div>`); return; }
   // Fresh results fade in one row at a time; re-renders (switching tabs, starring) don't replay it.
   const reveal = s.reveal;
   s.reveal = false;
   const fx = (i) => (reveal ? ` style="animation-delay:${i * 90}ms"` : "");
   el.innerHTML = `${s.subject ? `<div class="about"><b>What this is about:</b> ${esc(s.subject)}${s.angles?.length ? `<div class="angles">${s.angles.slice(0, 5).map((a) => `<span>${esc(a)}</span>`).join("")}</div>` : ""}</div>` : ""}
   <table class="sug"><thead><tr><th style="width:44px"></th><th>Title</th><th class="r">Score</th></tr></thead><tbody>
-    ${s.titles.map((t, i) => `<tr data-t="${esc(t.title)}"${reveal ? ` class="reveal"` : ""}${fx(i)}><td class="star-cell"><button class="icon-btn star" data-star="${esc(t.title)}" title="Save">${STAR(isSaved(t.title))}</button></td><td><div>${esc(t.title)}<span class="pattern">${esc(t.pattern)}</span>${t.match ? `<span class="pattern match" title="Contains a phrase people are searching for now">🔍 ${esc(t.match.query)} · ${esc(t.match.label)}</span>` : ""}</div>
+    ${s.titles.map((t, i) => `<tr data-t="${esc(t.title)}" class="${reveal ? "reveal" : ""}${state.open === t.title ? " open" : ""}"${fx(i)}><td class="star-cell"><button class="icon-btn star" data-star="${esc(t.title)}" title="Save">${STAR(isSaved(t.title))}</button></td><td><div>${esc(t.title)}<span class="pattern">${esc(t.pattern)}</span>${t.match ? `<span class="pattern match" title="Contains a phrase people are searching for now">🔍 ${esc(t.match.query)} · ${esc(t.match.label)}</span>` : ""}</div>
       ${t.inspired_by ? `<div class="from">Inspired by <a href="${esc(t.inspired_url)}" target="_blank" rel="noopener">${esc(t.inspired_by)}</a>${t.inspired_views ? ` · ${fmt(t.inspired_views)} views` : ""}</div>` : `<div class="from">From title-score: one of the framings that lifts vidIQ's score most</div>`}</td>
-      <td class="r"><span class="badge ${t.score >= 70 ? "b-green" : t.score >= 50 ? "b-amber" : "b-red"}">${t.score}</span></td></tr>`).join("")}
+      <td class="r">${scoreCell(t.score)}</td></tr>${detail(t.title, 3)}`).join("")}
   </tbody></table>
-  <div class="note" style="display:flex;justify-content:space-between;align-items:center;gap:12px"><span>Click a title to score it above.</span><button class="btn ghost" id="moreT" style="height:34px">Suggest 5 more</button></div>
+  <div class="note" style="display:flex;justify-content:space-between;align-items:center;gap:12px"><span>Click a title to see what's moving its score.</span><button class="btn ghost" id="moreT" style="height:34px">Suggest 5 more</button></div>
   <div class="research${reveal ? " reveal" : ""}"${fx(s.titles.length)}>
     <div>
       <h4>What's working for “${esc(state.sugKw)}”</h4>
@@ -705,12 +739,11 @@ goBtn.addEventListener("focus", prefetch);
 for (const id of ["time", "geo", "property"]) $(id).addEventListener("change", prefetch);
 document.querySelectorAll("[data-tab]").forEach((b) => (b.onclick = () => setTab(b.dataset.tab)));
 
-// Opens on "claude code": live when connected (cached after the first load), otherwise the saved run.
-const DEFAULT_TOPIC = "claude code";
+// Opens on "claude code": live when connected (cached after the first load), otherwise the sample.
+const DEFAULT_TOPIC = SAMPLE?.seed ?? "claude code";
 $("q").value = DEFAULT_TOPIC;
 renderStatus();
 render();
 checkConnection().then(() => {
-  if (connected()) research([DEFAULT_TOPIC], opts());
-  else if (SNAPSHOT) openSnapshot(DEFAULT_TOPIC);
+  research([DEFAULT_TOPIC], opts());
 });

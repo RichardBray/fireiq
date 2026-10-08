@@ -125,6 +125,43 @@ app.post("/api/firecrawl/scrape", async (c) => {
   return new Response(r.body, { status: r.status, headers: { "content-type": "application/json" } });
 });
 
+// ---------- feedback ----------
+// The About page's form goes to Firecrawl's Alexandria feedback, sent as the viewer's team. The body is
+// built here from a few checked fields, so the page can't send anything else under the viewer's key.
+const FEATURES = new Set(["Chrome extension", "Channel audits", "Competitor tracking", "Keyword alerts", "More vidIQ-style features"]);
+const text = (v: unknown, max: number) => (typeof v === "string" ? v.trim().slice(0, max) : "");
+app.post("/api/feedback", async (c) => {
+  const s = await session(c);
+  if (!s) return c.json({ error: "Sign in with Firecrawl to send feedback.", auth: "missing" }, 401);
+  const b: any = await c.req.json().catch(() => ({}));
+  const rating = ["good", "partial", "bad"].includes(b.rating) ? b.rating : null;
+  const features = (Array.isArray(b.features) ? b.features : []).filter((f: unknown) => FEATURES.has(f as string));
+  const details = text(b.details, 1500);
+  const objective = text(b.objective, 2000);
+  if (!rating) return c.json({ error: "Pick how useful fireIQ is today." }, 400);
+  if (!details && !features.length) return c.json({ error: "Pick a feature or tell us what you'd want." }, 400);
+  const r = await fetch(`${FIRECRAWL}/feedback`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${s.key}`, "content-type": "application/json" },
+    body: JSON.stringify({
+      endpoint: "alexandria",
+      rating,
+      origin: "fireiq",
+      integration: "fireiq",
+      requestedWebsite: {
+        url: "https://www.youtube.com",
+        requestedFunctionality: `fireIQ as a full product.${features.length ? ` Wants: ${features.join(", ")}.` : ""}${details ? ` ${details}` : ""}`.slice(0, 2000),
+      },
+      rationale: details || `Wants: ${features.join(", ")}`,
+      ...(objective ? { objective } : {}),
+    }),
+  });
+  const j: any = await r.json().catch(() => ({}));
+  if (r.status === 401) return c.json({ error: "Firecrawl rejected this API key.", auth: "rejected" }, 401);
+  if (!r.ok || j.success === false) return c.json({ error: j.error || `Firecrawl error ${r.status}`, code: j.feedbackErrorCode }, r.status === 500 ? 502 : 400);
+  return c.json({ ok: true });
+});
+
 app.all("/api/*", (c) => c.json({ error: "Not found" }, 404));
 app.all("*", (c) => c.env.ASSETS.fetch(c.req.raw));
 
