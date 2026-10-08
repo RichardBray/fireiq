@@ -38,6 +38,8 @@ bunx wrangler deploy
 | A keyword's top videos (fetched when you click the keyword) | 2 |
 | Suggest titles (top videos + trending searches + Firecrawl's language model) | up to 12, less for keywords you've already researched; "Suggest 5 more" is free |
 
+Title Lab starts loading suggestions before you press **Suggest**: when it opens with a keyword filled in, when you pause typing a keyword, or when you point at the button. So opening the Lab with a new keyword spends those credits even if you never press it.
+
 ## How title suggestions work
 
 1. Scrape YouTube's results for the keyword sorted by views (all time and this year) and work out which title patterns earn the most views.

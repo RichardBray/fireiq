@@ -560,6 +560,12 @@ function renderLab(v) {
   update();
   renderSuggestions();
   $("sugForm").onsubmit = (e) => { e.preventDefault(); suggest(false); };
+  const sugKw = $("sugKw"), sugBtn = $("sugForm").querySelector('button[type="submit"]');
+  let sugTimer;
+  sugKw.oninput = () => { clearTimeout(sugTimer); sugTimer = setTimeout(() => prefetchSug(sugKw.value), 1000); };
+  sugBtn.addEventListener("pointerenter", () => prefetchSug(sugKw.value));
+  sugBtn.addEventListener("focus", () => prefetchSug(sugKw.value));
+  prefetchSug(sugKw.value);
   $("saveT").onclick = () => toggleSave(input.value, state.sugKw ?? "");
   input.addEventListener("input", refreshSaved);
   refreshSaved();
@@ -582,46 +588,93 @@ function trendingFrom(d, keyword) {
   const top = (d?.top ?? []).filter((q) => q.query.toLowerCase() !== kw && !rising.some((r) => r.query === q.query)).slice(0, 4).map((q) => ({ query: q.query, label: "Most searched" }));
   return [...rising, ...top];
 }
+// Speculative title research, like the Research box: the slow part of "Suggest" starts while the user
+// pauses typing, heads for the button, or opens the Lab with a keyword already filled in, and suggest()
+// reuses the in-flight requests.
+const sugReqs = new Map();
+function sugReq(keyword) {
+  const key = keyword.toLowerCase();
+  if (!sugReqs.has(key)) {
+    // Trending searches for the keyword (free if it was already researched on Overview) guide the writer
+    // and give matching titles a ranking bonus. If Trends or the language model fails, carry on without.
+    // The language model scrapes YouTube itself, so it doesn't wait for the top videos.
+    const trending = fc.related(keyword, state.result?.opts ?? opts()).then((r) => trendingFrom(r.data, keyword)).catch(() => []);
+    const top = call(fc.youtubeTop(keyword));
+    const ideas = trending.then((t) => fc.titleIdeas(keyword, "", t)).catch(() => null);
+    top.catch(() => sugReqs.delete(key));
+    sugReqs.set(key, { top, trending, ideas });
+  }
+  return sugReqs.get(key);
+}
+function prefetchSug(keyword) {
+  keyword = keyword.trim();
+  if (connected() && keyword.length >= 3) sugReq(keyword);
+}
+
+// Each step stays up for a minimum time even when its data was prefetched: an answer that appears
+// instantly reads as canned, while seeing the work makes the same result feel considered.
+const STEPS = [
+  ["Reading YouTube's most-viewed videos", 300],
+  ["Checking what people search for now", 250],
+  ["Writing titles with Firecrawl's language model", 350],
+  ["Scoring and ranking", 200],
+];
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+let sugRun = 0;
 async function suggest(more) {
   const keyword = $("sugKw").value.trim();
-  const tool = "";
   if (!keyword) return;
   const same = state.sugKw === keyword;
   state.sugKw = keyword;
   if (!connected()) { state.sug = { error: "Not connected", auth: state.conn?.rejected ? "rejected" : "missing" }; return renderSuggestions(); }
   if (!more || !same) state.sugShown = [];
-  const prev = state.sug;
-  state.sug = { loading: true, prev: more && same ? prev : null };
+  const run = ++sugRun;
+  const req = sugReq(keyword);
+  const waits = [req.top, req.trending, req.ideas, null];
+  state.sug = { loading: true, step: more && same ? STEPS.length - 1 : 0 };
   renderSuggestions();
   const done = job(`Researching top YouTube titles for “${keyword}”`);
+  let next;
   try {
-    // Trending searches for the keyword (free if it was already researched on Overview) guide the writer
-    // and give matching titles a ranking bonus. If Trends or the language model fails, carry on without.
-    const o = state.result?.opts ?? opts();
-    const trendingP = fc.related(keyword, o).then((r) => trendingFrom(r.data, keyword)).catch(() => []);
-    const [top, trending] = await Promise.all([call(fc.youtubeTop(keyword)), trendingP]);
-    const ideas = await fc.titleIdeas(keyword, tool, trending).catch(() => null);
-    state.sug = suggestTitles(keyword, tool, top.data, (t) => scoreTitle(t, MODEL).score, state.sugShown, ideas?.data ?? null, trending);
-    if (!state.sug.studied && !ideas) throw new Error("None of YouTube's top videos for this keyword were on topic. Try a broader keyword.");
-    state.sugShown.push(...state.sug.titles.map((t) => t.title));
-  } catch (e) { state.sug = { error: e.message, auth: e.auth }; }
+    for (let i = state.sug.step; i < STEPS.length; i++) {
+      await Promise.all([waits[i], sleep(STEPS[i][1])]);
+      if (run !== sugRun) break;
+      state.sug.step = i + 1;
+      if (state.tab === "lab") renderSuggestions();
+    }
+    const [top, trending, ideas] = await Promise.all([req.top, req.trending, req.ideas]);
+    next = suggestTitles(keyword, "", top.data, (t) => scoreTitle(t, MODEL).score, state.sugShown, ideas?.data ?? null, trending);
+    if (!next.studied && !ideas) throw new Error("None of YouTube's top videos for this keyword were on topic. Try a broader keyword.");
+    next.reveal = true;
+  } catch (e) { next = { error: e.message, auth: e.auth }; }
   done();
+  if (run !== sugRun) return;
+  state.sug = next;
+  if (next.titles) state.sugShown.push(...next.titles.map((t) => t.title));
   if (state.tab === "lab") renderSuggestions();
 }
 function renderSuggestions() {
   const el = $("sug"); if (!el) return;
   const s = state.sug;
   if (!s) { el.innerHTML = `<div class="note">Reads the most-viewed YouTube videos for the keyword with Firecrawl, works out what the subject is and which title patterns earn the most views, writes 15 new titles, then shows the 5 that score highest. Edit them so they match your video.</div>`; return; }
-  if (s.loading) { el.innerHTML = Array.from({ length: 5 }, () => `<div class="skel" style="height:48px;margin-top:8px"></div>`).join(""); return; }
+  if (s.loading) {
+    el.innerHTML = `<ol class="steps">${STEPS.map(([t], i) => `<li class="${i < s.step ? "done" : i === s.step ? "on" : ""}">${i === s.step ? `<span class="spin"></span>` : `<span class="tick"></span>`}${esc(t)}</li>`).join("")}</ol>
+      ${Array.from({ length: 5 }, () => `<div class="skel" style="height:48px;margin-top:8px"></div>`).join("")}`;
+    return;
+  }
   if (s.error) { el.innerHTML = s.auth ? connectCard(s.auth) : `<div class="err" style="margin-top:10px">${esc(s.error)}</div>`; return; }
+  // Fresh results fade in one row at a time; re-renders (switching tabs, starring) don't replay it.
+  const reveal = s.reveal;
+  s.reveal = false;
+  const fx = (i) => (reveal ? ` style="animation-delay:${i * 90}ms"` : "");
   el.innerHTML = `${s.subject ? `<div class="about"><b>What this is about:</b> ${esc(s.subject)}${s.angles?.length ? `<div class="angles">${s.angles.slice(0, 5).map((a) => `<span>${esc(a)}</span>`).join("")}</div>` : ""}</div>` : ""}
   <table class="sug"><thead><tr><th style="width:44px"></th><th>Title</th><th class="r">Score</th></tr></thead><tbody>
-    ${s.titles.map((t) => `<tr data-t="${esc(t.title)}"><td class="star-cell"><button class="icon-btn star" data-star="${esc(t.title)}" title="Save">${STAR(isSaved(t.title))}</button></td><td><div>${esc(t.title)}<span class="pattern">${esc(t.pattern)}</span>${t.match ? `<span class="pattern match" title="Contains a phrase people are searching for now">🔍 ${esc(t.match.query)} · ${esc(t.match.label)}</span>` : ""}</div>
+    ${s.titles.map((t, i) => `<tr data-t="${esc(t.title)}"${reveal ? ` class="reveal"` : ""}${fx(i)}><td class="star-cell"><button class="icon-btn star" data-star="${esc(t.title)}" title="Save">${STAR(isSaved(t.title))}</button></td><td><div>${esc(t.title)}<span class="pattern">${esc(t.pattern)}</span>${t.match ? `<span class="pattern match" title="Contains a phrase people are searching for now">🔍 ${esc(t.match.query)} · ${esc(t.match.label)}</span>` : ""}</div>
       ${t.inspired_by ? `<div class="from">Inspired by <a href="${esc(t.inspired_url)}" target="_blank" rel="noopener">${esc(t.inspired_by)}</a>${t.inspired_views ? ` · ${fmt(t.inspired_views)} views` : ""}</div>` : `<div class="from">From title-score: one of the framings that lifts vidIQ's score most</div>`}</td>
       <td class="r"><span class="badge ${t.score >= 70 ? "b-green" : t.score >= 50 ? "b-amber" : "b-red"}">${t.score}</span></td></tr>`).join("")}
   </tbody></table>
   <div class="note" style="display:flex;justify-content:space-between;align-items:center;gap:12px"><span>Click a title to score it above.</span><button class="btn ghost" id="moreT" style="height:34px">Suggest 5 more</button></div>
-  <div class="research">
+  <div class="research${reveal ? " reveal" : ""}"${fx(s.titles.length)}>
     <div>
       <h4>What's working for “${esc(state.sugKw)}”</h4>
       <div class="pats">${s.patterns.map((p) => `<div class="pat"><span>${esc(p.name)}</span><div class="pbar"><i style="width:${Math.round(p.share * 100)}%"></i></div><b>${Math.round(p.share * 100)}%</b></div>`).join("")}</div>

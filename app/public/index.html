@@ -22,6 +22,8 @@ a { color: inherit; text-decoration: none; }
 ::-webkit-scrollbar { width: 10px; height: 10px; } ::-webkit-scrollbar-thumb { background: #262b3a; border-radius: 8px; border: 2px solid var(--bg); }
 
 .app { max-width: 1320px; margin: 0 auto; }
+.wip { padding: 8px 16px; text-align: center; font-size: 13.5px; color: #ffd9c7; background: rgba(250, 93, 25, .12); border-bottom: 1px solid rgba(250, 93, 25, .3); }
+.wip b { color: var(--accent); font-weight: 700; }
 
 /* main */
 .topnav { position: sticky; top: 0; z-index: 10; background: rgba(11, 13, 20, .88); backdrop-filter: blur(12px); border-bottom: 1px solid var(--line); }
@@ -208,6 +210,14 @@ td .sub { color: var(--dim); font-size: 13px; margin-left: 8px; }
 .fbar::after { content: ""; position: absolute; left: 50%; top: -4px; bottom: -4px; width: 1px; background: #343a4d; }
 .factor .val { text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; }
 .note { color: var(--dim); font-size: 13px; margin-top: 10px; }
+.steps { list-style: none; margin: 12px 0 4px; padding: 0; display: grid; gap: 8px; font-size: 14px; color: var(--dim); }
+.steps li { display: flex; align-items: center; gap: 10px; transition: color .2s; }
+.steps li.on { color: var(--text); } .steps li.done { color: var(--muted); }
+.steps .tick { width: 13px; height: 13px; flex: none; border-radius: 50%; border: 2px solid var(--line); }
+.steps li.done .tick { border: 0; background: var(--green); box-shadow: 0 0 0 3px rgba(47, 211, 107, .18); }
+.reveal { animation: reveal .35s ease-out both; }
+@keyframes reveal { from { opacity: 0; transform: translateY(6px); } }
+@media (prefers-reduced-motion: reduce) { .reveal { animation: none; } }
 
 @media (max-width: 900px) {
   .research { grid-template-columns: minmax(0, 1fr); }
@@ -226,6 +236,7 @@ td .sub { color: var(--dim); font-size: 13px; margin-left: 8px; }
 </style>
 </head>
 <body>
+<div class="wip" role="status"><b>Work in progress.</b> fireIQ is still being built, so features and results may change.</div>
 <header class="topnav"><div class="in">
   <div class="brand"><img class="flame" src="firecrawl-logo.svg" alt="" width="22" height="31">fire<span class="iq">IQ</span></div>
   <nav class="tabs" id="tabs">
