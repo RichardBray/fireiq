@@ -34,11 +34,11 @@ FIRECRAWL_API_KEY=fc-... bun scripts/make-sample.js "claude code"
 ```sh
 bunx wrangler login
 bunx wrangler secret put COOKIE_SECRET   # a long random string
-bunx wrangler secret put GLM_API_KEY     # optional: Title Lab writes titles with GLM
+bunx wrangler secret put GLM_API_KEY     # optional: an OpenRouter key, so Title Lab writes titles with GLM
 bunx wrangler deploy
 ```
 
-GLM is called on the OpenAI-style `chat/completions` route at `https://api.z.ai/api/paas/v4` with model `glm-5.3-flash`. Set `GLM_BASE_URL` or `GLM_MODEL` (as vars or secrets) to use another endpoint or model. Without `GLM_API_KEY`, or when GLM returns an error, Title Lab uses Firecrawl's language model as before. After a key or balance error, the Worker skips GLM for 10 minutes. Locally, add `GLM_API_KEY=...` to `.dev.vars`.
+GLM is called through [OpenRouter](https://openrouter.ai) (`https://openrouter.ai/api/v1`, model `z-ai/glm-5.3-flash`). Z.ai's own API can't be used from a Worker: Alibaba Cloud's firewall in front of it answers with a 405 page. Set `GLM_BASE_URL` or `GLM_MODEL` (as vars or secrets) to use another OpenAI-compatible endpoint or model. Without `GLM_API_KEY`, or when GLM returns an error, Title Lab uses Firecrawl's language model as before. After a key or balance error the Worker skips GLM for 10 minutes, and after any other error for a minute. Locally, add `GLM_API_KEY=...` to `.dev.vars`.
 
 ## Cost
 

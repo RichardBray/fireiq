@@ -163,9 +163,10 @@ app.post("/api/feedback", async (c) => {
 });
 
 // ---------- title writer (GLM) ----------
-// Title Lab tries GLM first with the owner's key (GLM_API_KEY). Any failure, including no key or no
-// balance, returns 503 and the page falls back to Firecrawl's JSON format. The prompt is built here from
-// checked fields, so signed-in viewers can't use the key for anything else.
+// Title Lab tries GLM first, through OpenRouter by default, with the owner's key (GLM_API_KEY). Z.ai's own
+// API sits behind Alibaba Cloud's firewall, which answers requests from Workers with a 405 page. Any
+// failure, including no key or no balance, returns 503 and the page falls back to Firecrawl's JSON format.
+// The prompt is built here from checked fields, so signed-in viewers can't use the key for anything else.
 let glmDownUntil = 0;
 app.post("/api/llm/titles", async (c) => {
   const key = c.env.GLM_API_KEY;
@@ -196,11 +197,11 @@ For each, give the existing title whose pattern it borrows.
 
 Reply with JSON only: {"subject": "one sentence on what the subject is", "angles": ["what viewers find interesting", ...], "titles": [{"title": "...", "inspired_by": "..."}, ...]}`;
   try {
-    const r = await fetch(`${c.env.GLM_BASE_URL || "https://api.z.ai/api/paas/v4"}/chat/completions`, {
+    const r = await fetch(`${c.env.GLM_BASE_URL || "https://openrouter.ai/api/v1"}/chat/completions`, {
       method: "POST",
       headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
       body: JSON.stringify({
-        model: c.env.GLM_MODEL || "glm-5.3-flash",
+        model: c.env.GLM_MODEL || "z-ai/glm-5.3-flash",
         messages: [{ role: "user", content: prompt }],
         response_format: { type: "json_object" },
         temperature: 0.9,
@@ -208,8 +209,9 @@ Reply with JSON only: {"subject": "one sentence on what the subject is", "angles
       signal: AbortSignal.timeout(30_000),
     });
     if (!r.ok) {
-      // A bad key or an empty balance won't fix itself between requests, so skip GLM for a while.
-      if ([401, 402, 403, 429].includes(r.status)) glmDownUntil = Date.now() + 10 * 60_000;
+      // A bad key or an empty balance won't fix itself between requests, so skip GLM for a while; anything
+      // else (a block page, rate limit or outage) for a minute, so every suggestion doesn't wait on it.
+      glmDownUntil = Date.now() + ([401, 402, 403].includes(r.status) ? 10 : 1) * 60_000;
       console.log("GLM error", r.status, (await r.text()).slice(0, 300));
       return c.json({ error: `GLM error ${r.status}`, fallback: true }, 503);
     }
@@ -224,7 +226,7 @@ Reply with JSON only: {"subject": "one sentence on what the subject is", "angles
       subject: text(out.subject, 300),
       angles: (Array.isArray(out.angles) ? out.angles : []).map((a: unknown) => text(a, 200)).filter(Boolean).slice(0, 8),
       titles,
-      model: j.model || c.env.GLM_MODEL || "glm-5.3-flash",
+      model: j.model || c.env.GLM_MODEL || "z-ai/glm-5.3-flash",
     });
   } catch (e: any) {
     console.log("GLM failed", e?.message);
