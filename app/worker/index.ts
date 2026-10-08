@@ -204,6 +204,9 @@ Reply with JSON only: {"subject": "one sentence on what the subject is", "angles
         model: c.env.GLM_MODEL || "z-ai/glm-5.3-flash",
         messages: [{ role: "user", content: prompt }],
         response_format: { type: "json_object" },
+        // GLM 5.3 always reasons, at "max" effort by default, which pushes 15 titles past the timeout.
+        reasoning: { effort: "low", exclude: true },
+        provider: { sort: "throughput" },
         temperature: 0.9,
       }),
       signal: AbortSignal.timeout(30_000),

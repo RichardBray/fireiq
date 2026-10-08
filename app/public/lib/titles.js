@@ -208,7 +208,9 @@ export function suggestTitles(keyword, tool, videos, score, exclude = [], ideas 
   const findVideo = (title) => {
     const l = norm(title).slice(0, 40);
     if (l.length < 10) return null;
-    return real.find((v) => norm(v.title).startsWith(l)) ?? videos.find((v) => norm(v.title).startsWith(l)) ?? null;
+    // Models sometimes add to the title they quote, e.g. "… (I did X)", so either may be a prefix of the other.
+    const same = (v) => { const n = norm(v.title); return n.startsWith(l) || (n.length >= 10 && norm(title).startsWith(n)); };
+    return real.find(same) ?? videos.find(same) ?? null;
   };
   for (const i of ideas?.titles ?? [])
     add(i.title.replace(/!+/g, "!"), patternOf(i.title), findVideo(i.inspired_by), true);
