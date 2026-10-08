@@ -187,7 +187,7 @@ Work out what the subject actually is and what makes viewers click. Then write 1
 - Be specific to this subject: use real names, features and comparisons from these videos, never filler like "game changer", "revolutionary" or "explored".
 - Use what works here: first-person framing ("I tested…", "I replaced…"), a surprising claim, a comparison, or a direct challenge to the viewer.
 - Never invent results or statistics. Only use a number if it appears in the list above.
-- No emoji, at most one exclamation mark across all titles, Title Case, under 65 characters.
+- No emoji, no em or en dashes (use a colon or a period instead), at most one exclamation mark across all titles, Title Case, under 65 characters.
 - Every title takes a different angle and must not copy or lightly reword an existing title.
 For each, give the existing title whose pattern it borrows.
 

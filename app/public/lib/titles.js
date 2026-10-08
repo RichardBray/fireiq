@@ -187,7 +187,8 @@ export function suggestTitles(keyword, tool, videos, score, exclude = [], ideas 
   const rank = (s) => s.score + (s.match?.bonus ?? 0);
   const pool = [];
   const add = (title, pattern, src) => {
-    title = title.replace(/\s+/g, " ").trim();
+    // Models still slip in em dashes despite the prompt, and adapted top titles can carry them.
+    title = title.replace(/\s*[—–]\s*/g, (_, i, s) => (i === 0 || i + _.length === s.length ? "" : s.includes(":") ? " - " : ": ")).replace(/\s+/g, " ").trim();
     const l = title.toLowerCase();
     if (title.length > 80 || pool.some((s) => s.title.toLowerCase() === l) || real.some((v) => v.title.toLowerCase() === l))
       return;
